@@ -97,6 +97,10 @@ class VideoProcessor:
 class ANPRProcessor:
     """Main ANPR processing class"""
     
+    #----------------------------------------------------------------------------------------------
+    # Initialization
+    #----------------------------------------------------------------------------------------------
+    
     def __init__(self):
         # Initialize components
         self.model = YOLO(MODEL_PATH)
@@ -136,14 +140,22 @@ class ANPRProcessor:
         # Processing queue for multithreading
         self.queue = Queue(maxsize=10)
         self.running = True
-        
+    
+    #----------------------------------------------------------------------------------------------
+    # Preprocess Plate
+    #----------------------------------------------------------------------------------------------  
+    
     def preprocess_plate(self, image):
         """Preprocess image for better OCR results"""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return thresh
-        
+    
+    #----------------------------------------------------------------------------------------------
+    # OCR License Plate
+    #----------------------------------------------------------------------------------------------
+    
     def ocr_license_plate(self, image):
         """Perform OCR on license plate image"""
         try:
@@ -175,6 +187,10 @@ class ANPRProcessor:
             logger.error(f"OCR Error: {str(e)}")
             return "", 0.0
 
+    #----------------------------------------------------------------------------------------------
+    # Save to the Database
+    #----------------------------------------------------------------------------------------------
+    
     # def save_to_database(self, plates, start_time, end_time):
     #     """Batch save plates to database with time window"""
         
@@ -254,6 +270,9 @@ class ANPRProcessor:
     #             self.db_pool.putconn(conn)
     #             logger.info("Database connection returned to pool")
     
+    #----------------------------------------------------------------------------------------------
+    # Process Frames
+    #----------------------------------------------------------------------------------------------
     
     def process_frame(self, frame):
         """Process a single video frame"""
@@ -293,7 +312,11 @@ class ANPRProcessor:
             self.running = False
                                
         return frame
-        
+    
+    #----------------------------------------------------------------------------------------------
+    # Cleanup Tracker
+    #----------------------------------------------------------------------------------------------
+     
     def cleanup_tracker(self):
         """Cleanup old entries from tracker"""
         now = time.time()
@@ -302,6 +325,10 @@ class ANPRProcessor:
                   
         for plate in expired:
             del self.plate_tracker[plate]
+    
+    #----------------------------------------------------------------------------------------------
+    # Process Video
+    #----------------------------------------------------------------------------------------------
     
     def process_video(self):
         """Main processing loop"""
@@ -355,6 +382,10 @@ class ANPRProcessor:
             logger.info("Video processing completed")
 
 
+#----------------------------------------------------------------------------------------------
+# Main Function
+#----------------------------------------------------------------------------------------------
+    
 def main():
     processor = ANPRProcessor()
     try:
