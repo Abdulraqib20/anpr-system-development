@@ -305,9 +305,6 @@ class ANPRProcessor:
     
     def process_video(self):
         """Main processing loop"""
-        if not self.test_db_connection():
-            logger.critical("Cannot proceed with video processing due to database connection issues")
-            return
         
         with VideoProcessor(VIDEO_SOURCE) as video:
             logger.info("Starting video processing...")
@@ -361,9 +358,6 @@ class ANPRProcessor:
 def main():
     processor = ANPRProcessor()
     try:
-        if not processor.test_db_connection():
-            logger.critical("Cannot proceed due to database connection issues. Check credentials.")
-            return
         processor.process_video()
     except KeyboardInterrupt:
         logger.info("Shutting down...")
