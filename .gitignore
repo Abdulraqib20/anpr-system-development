@@ -42,6 +42,7 @@ data
 diagrams
 *.bkp
 *.drawio
+*.log
 json
 
 # OS specific
