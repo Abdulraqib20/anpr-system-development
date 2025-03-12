@@ -47,17 +47,21 @@ def create_connection(db_params):
     return conn
 
 def create_table(conn):
-    """Create the license_plates table if it doesn't exist"""
+    """Create the license_plates2 table if it doesn't exist"""
     try:
         with conn.cursor() as cursor:
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS license_plates(
+                CREATE TABLE IF NOT EXISTS license_plates2(
                     id SERIAL PRIMARY KEY,
                     start_time TIMESTAMP NOT NULL,
                     end_time TIMESTAMP NOT NULL,
                     license_plate TEXT NOT NULL,
                     confidence FLOAT,
                     detection_count INTEGER,
+                    vehicle_type TEXT,
+                    vehicle_color TEXT,
+                    time_of_day TEXT,
+                    day_of_week TEXT,
                     UNIQUE(start_time, end_time, license_plate)
                 )
             ''')
@@ -65,7 +69,9 @@ def create_table(conn):
         print("Table created successfully.")
     except (Exception, psycopg2.Error) as error:
         print(f"Error creating table: {error}")
-        
+
+
+   
 def main():
     # Connect to the PostgreSQL database
     conn = create_connection(db_params)
