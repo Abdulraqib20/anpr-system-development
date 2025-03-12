@@ -12,12 +12,16 @@ from collections import defaultdict
 from threading import Thread
 from queue import Queue
 
+from datetime import datetime, timedelta
+import colorsys
+
 import numpy as np
 from ultralytics import YOLO
 from paddleocr import PaddleOCR
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from dotenv import load_dotenv
+
 load_dotenv()
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -36,6 +40,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # VIDEO_SOURCE="Resources/car_vid.mp4"
 # OUTPUT_PATH="output/annotated_video.mp4"
 
+VEHICLE_MODEL_PATH = "models/yolov8n.pt" 
 MODEL_PATH="models/license_plate_detector.pt"
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,10}$')  # Pre-compiled pattern
 TRACKING_FRAMES=30
@@ -71,6 +76,28 @@ db_params = {
     "port": DB_PORT
 }
 
+VEHICLE_CLASSES = {
+    2: 'car',
+    3: 'motorcycle',
+    5: 'bus',
+    7: 'truck',
+    8: 'boat',
+}
+
+# Define color mapping for common vehicle colors
+COLOR_RANGES = {
+    'black': ([0, 0, 0], [180, 255, 30]),
+    'white': ([0, 0, 200], [180, 30, 255]),
+    'gray': ([0, 0, 70], [180, 30, 200]),
+    'red': ([0, 100, 100], [10, 255, 255]),
+    'blue': ([100, 100, 100], [140, 255, 255]),
+    'green': ([40, 100, 100], [80, 255, 255]),
+    'yellow': ([20, 100, 100], [35, 255, 255]),
+    'orange': ([10, 100, 100], [20, 255, 255]),
+    'brown': ([10, 50, 50], [20, 255, 150]),
+    'silver': ([0, 0, 140], [180, 30, 200]),
+}
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -78,6 +105,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger("ANPR")
+
 
 class VideoProcessor:
     """Handles video input/output operations"""
@@ -151,9 +179,17 @@ class ANPRProcessor:
     
     def __init__(self):
         # Initialize components
+        self.vehicle_model = YOLO(VEHICLE_MODEL_PATH)
         self.model = YOLO(MODEL_PATH)
         self.ocr = PaddleOCR(use_angle_cls=True, use_gpu=False)
-        self.plate_tracker = defaultdict(lambda: {'count': 0, 'confidence': 0, 'last_seen': 0})
+        self.plate_tracker = defaultdict(lambda: {
+            'count': 0, 
+            'confidence': 0, 
+            'last_seen': 0,
+            'vehicle_type': None,
+            'vehicle_color': None,
+            'time_details': {},
+        })
         
         self.plate_history = {}  # Track recently seen plates
         self.cooldown_period = 30  # Seconds before a plate can be re-detected
@@ -211,6 +247,108 @@ class ANPRProcessor:
         return previous_row[-1]
     
     #----------------------------------------------------------------------------------------------
+    # Detect Vehicle Type
+    #----------------------------------------------------------------------------------------------  
+    def detect_vehicle_type(self, frame):
+        """Detect vehicle type using YOLOv8 model"""
+        results = self.vehicle_model.predict(frame, conf=0.5, verbose=False)
+        detected_vehicles = []
+        
+        for result in results:
+            boxes = result.boxes.xyxy.cpu().numpy()
+            classes = result.boxes.cls.cpu().numpy()
+            confs = result.boxes.conf.cpu().numpy()
+            
+            for box, cls, conf in zip(boxes, classes, confs):
+                cls_id = int(cls)
+                if cls_id in VEHICLE_CLASSES:
+                    x1, y1, x2, y2 = map(int, box)
+                    vehicle_type = VEHICLE_CLASSES[cls_id]
+                    detected_vehicles.append({
+                        'type': vehicle_type,
+                        'confidence': float(conf),
+                        'box': (x1, y1, x2, y2)
+                    })
+        
+        return detected_vehicles
+    
+    #----------------------------------------------------------------------------------------------
+    # Detect Vehicle Color
+    #----------------------------------------------------------------------------------------------  
+    def detect_vehicle_color(self, frame, vehicle_box):
+        """Detect dominant color of vehicle"""
+        x1, y1, x2, y2 = vehicle_box
+        
+        # Extract vehicle ROI
+        vehicle_roi = frame[y1:y2, x1:x2]
+        if vehicle_roi.size == 0:
+            return "unknown"
+            
+        # Convert to HSV color space
+        hsv_roi = cv2.cvtColor(vehicle_roi, cv2.COLOR_BGR2HSV)
+        
+        # Create mask to ignore background
+        mask = cv2.inRange(hsv_roi, np.array([0, 30, 30]), np.array([180, 255, 255]))
+        
+        # Find dominant color
+        if np.sum(mask) > 0:
+            # Calculate histogram of masked region
+            hist = cv2.calcHist([hsv_roi], [0, 1], mask, [36, 50], [0, 180, 0, 256])
+            hist = cv2.normalize(hist, hist).flatten()
+            max_idx = np.argmax(hist)
+            h_bin = max_idx // 50
+            s_bin = max_idx % 50
+            
+            # Map histogram bin to color
+            h_value = h_bin * 5  # 180/36 = 5
+            s_value = s_bin * 5.12  # 256/50 = 5.12
+            
+            # Match to predefined colors
+            for color_name, (lower, upper) in COLOR_RANGES.items():
+                if lower[0] <= h_value <= upper[0] and lower[1] <= s_value <= upper[1]:
+                    return color_name
+        
+        return "unknown"
+    
+    #----------------------------------------------------------------------------------------------
+    # Time Details
+    #----------------------------------------------------------------------------------------------  
+    
+    def get_time_details(self):
+        """Extract detailed timestamp information"""
+        now = datetime.now()
+        
+        # Basic time info
+        hour = now.hour
+        
+        # Time of day classification
+        if 5 <= hour < 12:
+            time_of_day = "morning"
+        elif 12 <= hour < 17:
+            time_of_day = "afternoon"
+        elif 17 <= hour < 21:
+            time_of_day = "evening"
+        else:
+            time_of_day = "night"
+            
+        # Day of week
+        day_of_week = now.strftime("%A")
+        
+        # # Weekend or weekday
+        # is_weekend = day_of_week in ["Saturday", "Sunday"]
+        
+        # # Peak hours (typical traffic patterns)
+        # is_peak_hour = (7 <= hour < 10) or (16 <= hour < 19)
+        
+        return {
+            "timestamp": now.isoformat(),
+            "time_of_day": time_of_day,
+            "day_of_week": day_of_week,
+            # "is_weekend": is_weekend,
+            # "is_peak_hour": is_peak_hour
+        }
+    
+    #----------------------------------------------------------------------------------------------
     # Preprocess Plate
     #----------------------------------------------------------------------------------------------  
     
@@ -261,7 +399,7 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     
     def save_to_database(self, valid_plates=None):
-        """Robust database saving with detailed logging"""
+        """Modified database saving with new attributes"""
         plates_to_save = valid_plates or self.plate_tracker
 
         if not plates_to_save:
@@ -274,14 +412,19 @@ class ANPRProcessor:
             conn.autocommit = False  # Explicit transaction control
 
             with conn.cursor() as cursor:
-                # Remove current_time and use first_seen and last_seen from tracker data
                 records = [
                     (
                         datetime.fromtimestamp(data['first_seen']).isoformat(),
                         datetime.fromtimestamp(data['last_seen']).isoformat(),
                         plate,
                         data['max_confidence'],
-                        data['count']
+                        data['count'],
+                        data['vehicle_type'],
+                        data['vehicle_color'],
+                        data['time_details']['time_of_day'],
+                        data['time_details']['day_of_week'],
+                        # data['time_details']['is_weekend'],
+                        # data['time_details']['is_peak_hour']
                     )
                     for plate, data in plates_to_save.items()
                     if data['count'] >= MIN_DETECTIONS
@@ -294,13 +437,16 @@ class ANPRProcessor:
                 logger.info(f"Attempting to save {len(records)} records")
 
                 cursor.executemany("""
-                    INSERT INTO license_plates 
-                    (start_time, end_time, license_plate, confidence, detection_count)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO license_plates2
+                    (start_time, end_time, license_plate, confidence, detection_count, 
+                     vehicle_type, vehicle_color, time_of_day, day_of_week)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (start_time, end_time, license_plate) 
                     DO UPDATE SET
-                        confidence = GREATEST(license_plates.confidence, EXCLUDED.confidence),
-                        detection_count = license_plates.detection_count + EXCLUDED.detection_count
+                        confidence = GREATEST(license_plates2.confidence, EXCLUDED.confidence),
+                        detection_count = license_plates2.detection_count + EXCLUDED.detection_count,
+                        vehicle_type = EXCLUDED.vehicle_type,
+                        vehicle_color = EXCLUDED.vehicle_color
                 """, records)
 
                 conn.commit()
@@ -311,37 +457,32 @@ class ANPRProcessor:
                     if plate in self.plate_tracker:
                         del self.plate_tracker[plate]
 
-        except psycopg2.OperationalError as e:
-            logger.critical(f"Connection failed: {str(e)}")
-            self.db_pool.closeall()
-            self.db_pool = SimpleConnectionPool(  # Reinitialize pool
-                minconn=1,
-                maxconn=10,
-                **db_params
-            )
-        except psycopg2.Error as e:
-            logger.error(f"Database error [{e.pgcode}]: {e.pgerror}")
-            if conn:
-                conn.rollback()
         except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
+            logger.error(f"Database error: {str(e)}")
             if conn:
                 conn.rollback()
         finally:
             if conn:
-                self.db_pool.putconn(conn)
-        
+                self.db_pool.putconn(conn)    
+    
     #----------------------------------------------------------------------------------------------
     # Process Frames
     #----------------------------------------------------------------------------------------------
     
     def process_frame(self, frame):
-        """Robust frame processing with proper error handling"""
+        """Modified process_frame method to include new attributes"""
         try:
             if not hasattr(self, 'window_initialized'):
                 cv2.namedWindow("ANPR Processing", cv2.WINDOW_NORMAL)
                 self.window_initialized = True
             
+            # Get timestamp details once per frame
+            time_details = self.get_time_details()
+            
+            # Detect vehicles first
+            vehicles = self.detect_vehicle_type(frame)
+            
+            # Original license plate detection
             results = self.model.predict(frame, conf=MIN_CONFIDENCE, verbose=False)
             
             current_detections = set()
@@ -367,32 +508,74 @@ class ANPRProcessor:
                         merged_plate = self._merge_similar_plates(plate_text)
                         current_detections.add(merged_plate)
                         
-                        # Update tracker with fail-safe
+                        # Find closest vehicle to this plate
+                        closest_vehicle = None
+                        min_distance = float('inf')
+                        
+                        for vehicle in vehicles:
+                            vx1, vy1, vx2, vy2 = vehicle['box']
+                            # Calculate center points
+                            plate_center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                            vehicle_center = ((vx1 + vx2) // 2, (vy1 + vy2) // 2)
+                            
+                            # Simple Euclidean distance
+                            distance = math.sqrt((plate_center[0] - vehicle_center[0])**2 + 
+                                                (plate_center[1] - vehicle_center[1])**2)
+                            
+                            if distance < min_distance:
+                                min_distance = distance
+                                closest_vehicle = vehicle
+                        
+                        # Get vehicle color if we found a vehicle
+                        vehicle_type = "unknown"
+                        vehicle_color = "unknown"
+                        
+                        if closest_vehicle and min_distance < 300:  # Threshold for matching
+                            vehicle_type = closest_vehicle['type']
+                            vehicle_color = self.detect_vehicle_color(frame, closest_vehicle['box'])
+                        
+                        # Update tracker with new attributes
                         now = time.time()
-                        self.plate_tracker[merged_plate] = {
+                        tracker_entry = {
                             'first_seen': self.plate_tracker.get(merged_plate, {}).get('first_seen', now),
                             'last_seen': now,
                             'max_confidence': max(
                                 self.plate_tracker.get(merged_plate, {}).get('max_confidence', 0),
                                 plate_conf
                             ),
-                            'count': self.plate_tracker.get(merged_plate, {}).get('count', 0) + 1
+                            'count': self.plate_tracker.get(merged_plate, {}).get('count', 0) + 1,
+                            'vehicle_type': vehicle_type,
+                            'vehicle_color': vehicle_color,
+                            'time_details': time_details
                         }
+                        
+                        self.plate_tracker[merged_plate] = tracker_entry
                         
                         logger.info(f"Tracked plate {merged_plate} with count {self.plate_tracker[merged_plate]['count']}")
                         
-                        # Visualization
+                        # Enhanced visualization
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.putText(frame, 
                                 f"{merged_plate} ({self.plate_tracker[merged_plate]['max_confidence']:.2f})",
                                 (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        
+                        # Add vehicle type and color to visualization
+                        cv2.putText(frame, 
+                                f"{vehicle_color} {vehicle_type}",
+                                (x1, y1 - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
                     
                     except Exception as e:
                         logger.error(f"Error processing box: {str(e)}")
                         continue
-
-            # Don't delete plates from tracker here - let cleanup_tracker handle it
             
+            # Display vehicles with bounding boxes
+            for vehicle in vehicles:
+                vx1, vy1, vx2, vy2 = vehicle['box']
+                cv2.rectangle(frame, (vx1, vy1), (vx2, vy2), (0, 0, 255), 2)
+                cv2.putText(frame, 
+                        f"{vehicle['type']} ({vehicle['confidence']:.2f})",
+                        (vx1, vy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
             cv2.imshow("ANPR Processing", frame)
             key = cv2.waitKey(1)
             if key == ord('q'):
@@ -404,7 +587,7 @@ class ANPRProcessor:
             logger.critical(f"Frame processing failed: {str(e)}")
             self.running = False
             return frame
-    
+        
     #----------------------------------------------------------------------------------------------
     # Cleanup Tracker
     #----------------------------------------------------------------------------------------------
