@@ -480,4 +480,5 @@ if __name__ == "__main__":
 #-----------------------------------------
 # Run the script with the following command
 #-----------------------------------------
-# python src/anpr.py --source "Resources/carImage2.png"
+# custom video file -- python src/anpr.py --source "Resources/car_vid.mp4"
+# webcam input -- python src/anpr.py --source 0
