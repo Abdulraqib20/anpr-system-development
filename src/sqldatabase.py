@@ -12,7 +12,6 @@ load_dotenv()
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # Add project root to Python path
 sys.path.append(str(Path(__file__).parent.parent.resolve()))  # More reliable path resolution
-# sys.path.append(os.path.abspath("src"))
 
 from config.appconfig import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT
 
@@ -67,25 +66,6 @@ def create_table(conn):
     except (Exception, psycopg2.Error) as error:
         print(f"Error creating table: {error}")
         
-# def save_to_database(license_plates, start_time, end_time):
-#     conn = create_connection(db_params)
-#     if conn:
-#         cursor = conn.cursor()
-#         for plate in license_plates:
-#             try:
-#                 cursor.execute('''
-#                     INSERT INTO license_plates 
-#                     (start_time, end_time, license_plate, confidence)
-#                     VALUES (%s, %s, %s, %s)
-#                     ON CONFLICT (start_time, end_time, license_plate) 
-#                     DO NOTHING 
-#                 ''', (start_time.isoformat(), end_time.isoformat(), plate[0], plate[1]))  # If plate is a tuple
-#             except psycopg2.Error as e:
-#                 print(f"Error inserting data: {e}")
-#         conn.commit()
-#         print("Data saved to the database successfully.")
-#         conn.close()
-
 def main():
     # Connect to the PostgreSQL database
     conn = create_connection(db_params)
