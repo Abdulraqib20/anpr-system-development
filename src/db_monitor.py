@@ -9,13 +9,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 sys.path.append(os.path.abspath("src"))
 
-
 from config.appconfig import (
     DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT,
-    # VIDEO_SOURCE, MODEL_PATH, OUTPUT_PATH,
-    # PLATE_REGEX, MIN_CONFIDENCE, TRACKING_FRAMES, MIN_DETECTIONS,
 )
-from sqldatabase import save_to_database
 
 DB_CONFIG = {
     "host": DB_HOST,
@@ -33,7 +29,7 @@ def fetch_latest_records(conn):
     """Fetch the latest 10 records from the database"""
     with conn.cursor() as cursor:
         cursor.execute("""
-            SELECT id, start_time, end_time, license_plate, confidence
+            SELECT id, start_time, end_time, license_plate, confidence, detection_count
             FROM license_plates
             ORDER BY end_time DESC
             LIMIT 10
@@ -44,10 +40,10 @@ def display_records(records):
     """Display records in a formatted table"""
     clear_screen()
     print("=== Real-Time License Plate Database Monitor ===")
-    print(f"{'ID':<5} | {'Start Time':<20} | {'End Time':<20} | {'Plate':<10} | {'Confidence':<10}")
+    print(f"{'ID':<5} | {'Start Time':<20} | {'End Time':<20} | {'Plate':<10} | {'Confidence':<10} | {'Detection Count':<10}")
     print("-" * 70)
     for record in records:
-        print(f"{record[0]:<5} | {str(record[1]):<20} | {str(record[2]):<20} | {record[3]:<10} | {record[4]:<10.2f}")
+        print(f"{record[0]:<5} | {str(record[1]):<20} | {str(record[2]):<20} | {record[3]:<10} | {record[4]:<10.2f} | {record[5]:<10}")
 
 def main():
     """Main monitoring loop"""
