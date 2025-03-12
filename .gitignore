@@ -45,6 +45,8 @@ diagrams
 *.log
 logs
 json
+output
+*.mp4
 
 # OS specific
 .DS_Store
