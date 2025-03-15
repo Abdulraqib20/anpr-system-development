@@ -17,6 +17,8 @@ import colorsys
 
 import numpy as np
 from ultralytics import YOLO
+import tensorflow as tf
+from keras import layers
 from paddleocr import PaddleOCR
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
@@ -40,7 +42,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # VIDEO_SOURCE="Resources/car_vid.mp4"
 # OUTPUT_PATH="output/annotated_video.mp4"
 
-VEHICLE_MODEL_PATH = "models/yolov8s.pt" 
+VEHICLE_MODEL_PATH = "models/yolov8m-seg.pt" 
 MODEL_PATH="models/license_plate_detector.pt"
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,10}$')  # Pre-compiled pattern
 TRACKING_FRAMES=30
@@ -84,19 +86,25 @@ VEHICLE_CLASSES = {
     8: 'boat',
 }
 
-# Define color mapping for common vehicle colors
-COLOR_RANGES = {
-    'black': ([0, 0, 0], [180, 255, 30]),
-    'white': ([0, 0, 200], [180, 30, 255]),
-    'gray': ([0, 0, 70], [180, 30, 200]),
-    'red': ([0, 100, 100], [10, 255, 255]),
-    'blue': ([100, 100, 100], [140, 255, 255]),
-    'green': ([40, 100, 100], [80, 255, 255]),
-    'yellow': ([20, 100, 100], [35, 255, 255]),
-    'orange': ([10, 100, 100], [20, 255, 255]),
-    'brown': ([10, 50, 50], [20, 255, 150]),
-    'silver': ([0, 0, 140], [180, 30, 200]),
-}
+# # Define color mapping for common vehicle colors
+# COLOR_RANGES = {
+#     'black': ([0, 0, 0], [180, 255, 30]),
+#     'white': ([0, 0, 200], [180, 30, 255]),
+#     'gray': ([0, 0, 70], [180, 30, 200]),
+#     'red': ([0, 100, 100], [10, 255, 255]),
+#     'blue': ([100, 100, 100], [140, 255, 255]),
+#     'green': ([40, 100, 100], [80, 255, 255]),
+#     'yellow': ([20, 100, 100], [35, 255, 255]),
+#     'orange': ([10, 100, 100], [20, 255, 255]),
+#     'brown': ([10, 50, 50], [20, 255, 150]),
+#     'silver': ([0, 0, 140], [180, 30, 200]),
+# }
+
+# Color class configuration (Add this near VEHICLE_CLASSES)
+COLOR_CLASSES = [
+    'beige', 'black', 'blue', 'brown', 'gold', 'green', 'grey',
+    'orange', 'pink', 'purple', 'red', 'silver', 'tan', 'white', 'yellow'
+]
 
 # Configure logging
 logging.basicConfig(
@@ -106,6 +114,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ANPR")
 
+class FixedDepthwiseConv2D(layers.DepthwiseConv2D):
+    def __init__(self, *args, **kwargs):
+        kwargs.pop('groups', None)
+        super().__init__(*args, **kwargs)
 
 class VideoProcessor:
     """Handles video input/output operations"""
@@ -191,6 +203,11 @@ class ANPRProcessor:
             'time_details': {},
         })
         
+        self.color_model = tf.keras.models.load_model(
+            "models/EFN-model.best.h5",
+            custom_objects={'DepthwiseConv2D': FixedDepthwiseConv2D}
+        )
+        
         self.plate_history = {}  # Track recently seen plates
         self.cooldown_period = 30  # Seconds before a plate can be re-detected
         
@@ -214,17 +231,50 @@ class ANPRProcessor:
     # Merge similar plates with Levenshtein distance
     #----------------------------------------------------------------------------------------------  
     def _merge_similar_plates(self, plate_text):
-        """Smart plate merging with length validation"""
-        plate_text = plate_text.strip()
+        """Enhanced plate merging with length validation and OCR error handling"""
+        plate_text = re.sub(r'[^A-Z0-9]', '', plate_text.strip())
+        
+        if not plate_text:
+            return ""
+            
+        # Common OCR error substitutions
+        ocr_replacements = {
+            '8': 'B',
+            '5': 'S',
+            '0': 'O',
+            '1': 'I',
+            '2': 'Z',
+            '6': 'G'
+        }
+        
+        # Generate normalized version for comparison
+        normalized = ''.join([ocr_replacements.get(c, c) for c in plate_text])
         
         # Check against existing plates
         for existing in list(self.plate_tracker.keys()):
-            if self._levenshtein_distance(existing, plate_text) <= 2:  # Fixed function name
-                # Prefer longer plates (reduces YAB658N vs YAB658NP issue)
-                if len(plate_text) > len(existing):
+            # Length must match exactly
+            if len(existing) != len(plate_text):
+                continue
+                
+            # Generate normalized existing plate
+            existing_normalized = ''.join([ocr_replacements.get(c, c) for c in existing])
+            
+            # First check exact match
+            if existing_normalized == normalized:
+                return existing
+                
+            # Then check Levenshtein distance (tighter threshold)
+            distance = self._levenshtein_distance(existing_normalized, normalized)
+            max_allowed = 1 if len(plate_text) > 6 else 0  # Allow 1 error for longer plates
+            
+            if distance <= max_allowed:
+                # Prefer plate with more letters (reduces 0 vs O conflicts)
+                letter_count = lambda s: sum(c.isalpha() for c in s)
+                if letter_count(plate_text) > letter_count(existing):
                     self.plate_tracker[plate_text] = self.plate_tracker.pop(existing)
                     return plate_text
                 return existing
+                
         return plate_text
 
     def _levenshtein_distance(self, s1, s2):
@@ -275,40 +325,64 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Color
     #----------------------------------------------------------------------------------------------  
-    def detect_vehicle_color(self, frame, vehicle_box):
-        """Detect dominant color of vehicle"""
-        x1, y1, x2, y2 = vehicle_box
+    # def detect_vehicle_color(self, frame, vehicle_box):
+    #     """Detect dominant color of vehicle"""
+    #     x1, y1, x2, y2 = vehicle_box
         
-        # Extract vehicle ROI
-        vehicle_roi = frame[y1:y2, x1:x2]
-        if vehicle_roi.size == 0:
+    #     # Extract vehicle ROI
+    #     vehicle_roi = frame[y1:y2, x1:x2]
+    #     if vehicle_roi.size == 0:
+    #         return "unknown"
+            
+    #     # Convert to HSV color space
+    #     hsv_roi = cv2.cvtColor(vehicle_roi, cv2.COLOR_BGR2HSV)
+        
+    #     # Create mask to ignore background
+    #     mask = cv2.inRange(hsv_roi, np.array([0, 30, 30]), np.array([180, 255, 255]))
+        
+    #     # Find dominant color
+    #     if np.sum(mask) > 0:
+    #         # Calculate histogram of masked region
+    #         hist = cv2.calcHist([hsv_roi], [0, 1], mask, [36, 50], [0, 180, 0, 256])
+    #         hist = cv2.normalize(hist, hist).flatten()
+    #         max_idx = np.argmax(hist)
+    #         h_bin = max_idx // 50
+    #         s_bin = max_idx % 50
+            
+    #         # Map histogram bin to color
+    #         h_value = h_bin * 5  # 180/36 = 5
+    #         s_value = s_bin * 5.12  # 256/50 = 5.12
+            
+    #         # Match to predefined colors
+    #         for color_name, (lower, upper) in COLOR_RANGES.items():
+    #             if lower[0] <= h_value <= upper[0] and lower[1] <= s_value <= upper[1]:
+    #                 return color_name
+        
+    #     return "unknown"
+    
+    def predict_vehicle_color(self, cropped_image):
+        """Predict vehicle color using trained model"""
+        try:
+            if cropped_image.size == 0:
+                return "unknown"
+                
+            # Preprocess image for color model
+            img = cv2.resize(cropped_image, (224, 224))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert to RGB
+            img_array = tf.keras.preprocessing.image.img_to_array(img)
+            img_array = np.expand_dims(img_array, axis=0) / 255.0
+
+            # Make prediction
+            predictions = self.color_model.predict(img_array, verbose=0)[0]
+            top_idx = np.argmax(predictions)
+            
+            # Only return if confidence meets threshold
+            if predictions[top_idx] > 0.5:
+                return COLOR_CLASSES[top_idx]
             return "unknown"
-            
-        # Convert to HSV color space
-        hsv_roi = cv2.cvtColor(vehicle_roi, cv2.COLOR_BGR2HSV)
-        
-        # Create mask to ignore background
-        mask = cv2.inRange(hsv_roi, np.array([0, 30, 30]), np.array([180, 255, 255]))
-        
-        # Find dominant color
-        if np.sum(mask) > 0:
-            # Calculate histogram of masked region
-            hist = cv2.calcHist([hsv_roi], [0, 1], mask, [36, 50], [0, 180, 0, 256])
-            hist = cv2.normalize(hist, hist).flatten()
-            max_idx = np.argmax(hist)
-            h_bin = max_idx // 50
-            s_bin = max_idx % 50
-            
-            # Map histogram bin to color
-            h_value = h_bin * 5  # 180/36 = 5
-            s_value = s_bin * 5.12  # 256/50 = 5.12
-            
-            # Match to predefined colors
-            for color_name, (lower, upper) in COLOR_RANGES.items():
-                if lower[0] <= h_value <= upper[0] and lower[1] <= s_value <= upper[1]:
-                    return color_name
-        
-        return "unknown"
+        except Exception as e:
+            logger.error(f"Color prediction error: {str(e)}")
+            return "unknown"
     
     #----------------------------------------------------------------------------------------------
     # Time Details
@@ -398,13 +472,23 @@ class ANPRProcessor:
     # Save to the Database
     #----------------------------------------------------------------------------------------------
     
-    def save_to_database(self, valid_plates=None):
+    def save_to_database(self, plates_to_save=None):
         """Modified database saving with new attributes"""
-        plates_to_save = valid_plates or self.plate_tracker
-
-        if not plates_to_save:
-            logger.warning("No plates to save")
+        plates_to_save = plates_to_save or self.plate_tracker
+        
+        # Strict color filtering
+        filtered_plates = {
+            plate: data for plate, data in plates_to_save.items()
+            if data.get('vehicle_color', '').lower() != 'unknown'
+        }
+        
+        if not filtered_plates:
+            logger.info("All plates filtered out due to unknown color")
             return
+
+        # if not plates_to_save:
+        #     logger.warning("No plates to save")
+        #     return
 
         conn = None
         try:
@@ -426,7 +510,7 @@ class ANPRProcessor:
                         # data['time_details']['is_weekend'],
                         # data['time_details']['is_peak_hour']
                     )
-                    for plate, data in plates_to_save.items()
+                    for plate, data in filtered_plates.items()
                     if data['count'] >= MIN_DETECTIONS
                 ]
 
@@ -435,18 +519,18 @@ class ANPRProcessor:
                     return
 
                 logger.info(f"Attempting to save {len(records)} records")
-
+                
                 cursor.executemany("""
                     INSERT INTO license_plates2
                     (start_time, end_time, license_plate, confidence, detection_count, 
-                     vehicle_type, vehicle_color, time_of_day, day_of_week)
+                    vehicle_type, vehicle_color, time_of_day, day_of_week)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (start_time, end_time, license_plate) 
+                    ON CONFLICT (start_time, end_time, license_plate)
                     DO UPDATE SET
                         confidence = GREATEST(license_plates2.confidence, EXCLUDED.confidence),
                         detection_count = license_plates2.detection_count + EXCLUDED.detection_count,
-                        vehicle_type = EXCLUDED.vehicle_type,
-                        vehicle_color = EXCLUDED.vehicle_color
+                        vehicle_type = COALESCE(EXCLUDED.vehicle_type, license_plates2.vehicle_type),
+                        vehicle_color = COALESCE(EXCLUDED.vehicle_color, license_plates2.vehicle_color)
                 """, records)
 
                 conn.commit()
@@ -500,6 +584,14 @@ class ANPRProcessor:
                         plate_text, plate_conf = self.ocr_license_plate(plate_img)
                         logger.info(f"OCR result: '{plate_text}' with confidence {plate_conf}")
                         
+                        now = time.time()
+                        if plate_text and (plate_text in self.plate_history):
+                            last_seen = self.plate_history[plate_text]
+                            if now - last_seen < self.cooldown_period:
+                                logger.info(f"Skipping plate {plate_text} - in cooldown period")
+                                continue
+                        self.plate_history[plate_text] = now
+                        
                         if not plate_text or plate_conf < MIN_CONFIDENCE:
                             logger.info(f"Plate rejected: empty text or low confidence {plate_conf}")
                             continue
@@ -532,7 +624,16 @@ class ANPRProcessor:
                         
                         if closest_vehicle and min_distance < 300:  # Threshold for matching
                             vehicle_type = closest_vehicle['type']
-                            vehicle_color = self.detect_vehicle_color(frame, closest_vehicle['box'])
+                            vx1, vy1, vx2, vy2 = closest_vehicle['box']
+                            vehicle_roi = frame[vy1:vy2, vx1:vx2]
+                            vehicle_color = self.predict_vehicle_color(vehicle_roi)
+                        
+                        # =================================================================
+                        # Add this color validation check RIGHT HERE
+                        # =================================================================
+                        if vehicle_color.lower() == "unknown":
+                            logger.info(f"Skipping plate {merged_plate} - unknown color")
+                            continue  # This skips the entire plate processing
                         
                         # Update tracker with new attributes
                         now = time.time()
