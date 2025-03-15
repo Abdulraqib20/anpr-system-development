@@ -44,7 +44,8 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 VEHICLE_MODEL_PATH = "models/yolov8m-seg.pt" 
 MODEL_PATH="models/license_plate_detector.pt"
-PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,10}$')  # Pre-compiled pattern
+# PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,10}$')  # Pre-compiled pattern
+PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 TRACKING_FRAMES=30
 MIN_CONFIDENCE=0.65
 PLATE_MERGE_DISTANCE=2
@@ -85,20 +86,6 @@ VEHICLE_CLASSES = {
     7: 'truck',
     8: 'boat',
 }
-
-# # Define color mapping for common vehicle colors
-# COLOR_RANGES = {
-#     'black': ([0, 0, 0], [180, 255, 30]),
-#     'white': ([0, 0, 200], [180, 30, 255]),
-#     'gray': ([0, 0, 70], [180, 30, 200]),
-#     'red': ([0, 100, 100], [10, 255, 255]),
-#     'blue': ([100, 100, 100], [140, 255, 255]),
-#     'green': ([40, 100, 100], [80, 255, 255]),
-#     'yellow': ([20, 100, 100], [35, 255, 255]),
-#     'orange': ([10, 100, 100], [20, 255, 255]),
-#     'brown': ([10, 50, 50], [20, 255, 150]),
-#     'silver': ([0, 0, 140], [180, 30, 200]),
-# }
 
 # Color class configuration (Add this near VEHICLE_CLASSES)
 COLOR_CLASSES = [
@@ -325,40 +312,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Color
     #----------------------------------------------------------------------------------------------  
-    # def detect_vehicle_color(self, frame, vehicle_box):
-    #     """Detect dominant color of vehicle"""
-    #     x1, y1, x2, y2 = vehicle_box
-        
-    #     # Extract vehicle ROI
-    #     vehicle_roi = frame[y1:y2, x1:x2]
-    #     if vehicle_roi.size == 0:
-    #         return "unknown"
-            
-    #     # Convert to HSV color space
-    #     hsv_roi = cv2.cvtColor(vehicle_roi, cv2.COLOR_BGR2HSV)
-        
-    #     # Create mask to ignore background
-    #     mask = cv2.inRange(hsv_roi, np.array([0, 30, 30]), np.array([180, 255, 255]))
-        
-    #     # Find dominant color
-    #     if np.sum(mask) > 0:
-    #         # Calculate histogram of masked region
-    #         hist = cv2.calcHist([hsv_roi], [0, 1], mask, [36, 50], [0, 180, 0, 256])
-    #         hist = cv2.normalize(hist, hist).flatten()
-    #         max_idx = np.argmax(hist)
-    #         h_bin = max_idx // 50
-    #         s_bin = max_idx % 50
-            
-    #         # Map histogram bin to color
-    #         h_value = h_bin * 5  # 180/36 = 5
-    #         s_value = s_bin * 5.12  # 256/50 = 5.12
-            
-    #         # Match to predefined colors
-    #         for color_name, (lower, upper) in COLOR_RANGES.items():
-    #             if lower[0] <= h_value <= upper[0] and lower[1] <= s_value <= upper[1]:
-    #                 return color_name
-        
-    #     return "unknown"
     
     def predict_vehicle_color(self, cropped_image):
         """Predict vehicle color using trained model"""
@@ -454,10 +407,15 @@ class ANPRProcessor:
                     text, conf = line[0]
                     texts.append(text)
                     confidences.append(conf)
-                    
+            
             # Clean and validate text
             combined = "".join(texts).upper()
             cleaned = re.sub(r'[^A-Z0-9]', '', combined)
+            
+            # Nigerian plate length validation
+            if len(cleaned) != 8:
+                logger.info(f"Rejected plate {cleaned} - invalid length {len(cleaned)}")
+                return "", 0.0
             
             if PLATE_REGEX.fullmatch(cleaned):
                 avg_conf = sum(confidences) / len(confidences)
@@ -476,10 +434,20 @@ class ANPRProcessor:
         """Modified database saving with new attributes"""
         plates_to_save = plates_to_save or self.plate_tracker
         
-        # Strict color filtering
+        # # Strict color filtering
+        # filtered_plates = {
+        #     plate: data for plate, data in plates_to_save.items()
+        #     if data.get('vehicle_color', '').lower() != 'unknown'
+        # }
+        
+        # Nigerian plate validation filters
         filtered_plates = {
             plate: data for plate, data in plates_to_save.items()
-            if data.get('vehicle_color', '').lower() != 'unknown'
+            if (
+                len(plate) == 8 and  # Nigerian plate length requirement
+                data.get('vehicle_color', '').lower() != 'unknown' and
+                re.match(r'^[A-Z0-9]{8}$', plate)  # Final regex check
+            )
         }
         
         if not filtered_plates:
@@ -718,20 +686,11 @@ class ANPRProcessor:
         with VideoProcessor(args.source) as video:
             logger.info("Starting video processing...")
             
-            # Initialize timing and control variables
-            # start_time = time.time()
-            # last_save_time = time.time()
-            # frame_skip = 2  # Process every 2nd frame
-            # time_limit = 10  # Seconds to process video
-            # max_detections_per_plate = 1  # Maximum times to detect each plate
-            # processed_plates = set()  # Track fully processed plates
-        
-            
             # Initialize timing and control variables for our own car
             start_time = time.time()
             last_save_time = time.time()
-            frame_skip = 5  # Process every 5th frame
-            time_limit = 30  # Seconds to process video
+            frame_skip = 3  # Process every nth frame
+            time_limit = 40  # Seconds to process video
             max_detections_per_plate = 2  # Maximum times to detect each plate
             processed_plates = set()  # Track fully processed plates
                 

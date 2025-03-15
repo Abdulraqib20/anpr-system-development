@@ -39,6 +39,7 @@ ENV/
 # Project specific
 video
 data
+db
 diagrams
 *.bkp
 *.drawio
@@ -47,6 +48,7 @@ logs
 json
 output
 *.mp4
+*.sql
 
 # OS specific
 .DS_Store
