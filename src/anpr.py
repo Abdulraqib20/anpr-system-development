@@ -50,10 +50,10 @@ MODEL_PATH = "models/license_plate_detector.pt"
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 TRACKING_FRAMES = 30
 MIN_CONFIDENCE = 0.65
-MIN_DETECTIONS = 2
+MIN_DETECTIONS = 1
 TIME_LIMIT = 30 # Seconds to process video
 MAX_DETECTIONS_PER_PLATE = 2 # Maximum times to detect each plate
-DEFAULT_FRAME_SKIP = 3  # Default value (Process every nth frame)
+DEFAULT_FRAME_SKIP = 5  # Default value (Process every nth frame)
 HIGH_FRAME_SKIP = 5 # Skip more frames for high FPS videos
 LOW_FRAME_SKIP = 1 # Process every frame for low FPS videos
 
@@ -380,53 +380,53 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Preprocess Plate
     #----------------------------------------------------------------------------------------------  
-    # def preprocess_plate(self, image):
-    #     """Preprocess image for better OCR results"""
-    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    #     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-    #     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    #     return thresh
-    
     def preprocess_plate(self, image):
-        """Enhanced preprocessing for better OCR results"""
-        # Check if image is valid
-        if image is None or image.size == 0:
-            return np.zeros((100, 100), dtype=np.uint8)
+        """Preprocess image for better OCR results"""
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return thresh
+    
+    # def preprocess_plate(self, image):
+    #     """Enhanced preprocessing for better OCR results"""
+    #     # Check if image is valid
+    #     if image is None or image.size == 0:
+    #         return np.zeros((100, 100), dtype=np.uint8)
             
-        # Maintain aspect ratio but normalize size
-        target_height = 80
-        ratio = image.shape[1] / image.shape[0]
-        target_width = int(target_height * ratio)
-        resized = cv2.resize(image, (target_width, target_height))
+    #     # Maintain aspect ratio but normalize size
+    #     target_height = 80
+    #     ratio = image.shape[1] / image.shape[0]
+    #     target_width = int(target_height * ratio)
+    #     resized = cv2.resize(image, (target_width, target_height))
         
-        # Convert to grayscale
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    #     # Convert to grayscale
+    #     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
         
-        # Try multiple preprocessing approaches
-        results = []
+    #     # Try multiple preprocessing approaches
+    #     results = []
         
-        # Approach 1: Adaptive thresholding
-        adaptive = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY, 11, 2
-        )
-        results.append(adaptive)
+    #     # Approach 1: Adaptive thresholding
+    #     adaptive = cv2.adaptiveThreshold(
+    #         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+    #         cv2.THRESH_BINARY, 11, 2
+    #     )
+    #     results.append(adaptive)
         
-        # Approach 2: CLAHE enhancement
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        results.append(binary)
+    #     # Approach 2: CLAHE enhancement
+    #     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    #     enhanced = clahe.apply(gray)
+    #     _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    #     results.append(binary)
         
-        # Approach 3: Edge enhancement
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blurred, 100, 200)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        dilated = cv2.dilate(edges, kernel, iterations=1)
-        results.append(255 - dilated)  # Invert for OCR
+    #     # Approach 3: Edge enhancement
+    #     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    #     edges = cv2.Canny(blurred, 100, 200)
+    #     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    #     dilated = cv2.dilate(edges, kernel, iterations=1)
+    #     results.append(255 - dilated)  # Invert for OCR
         
-        # Combine the approaches (stack them for OCR to try each)
-        return np.vstack(results)
+    #     # Combine the approaches (stack them for OCR to try each)
+    #     return np.vstack(results)
     
     #----------------------------------------------------------------------------------------------
     # OCR License Plate
@@ -723,20 +723,19 @@ class ANPRProcessor:
         with VideoProcessor(args.source) as video:
             logger.info("Starting video processing...")
             
-            # Initialize timing and control variables for our own car
+            # Initialize timing and control variables
             start_time = time.time()
             last_save_time = time.time()
             
+            # fps = video.fps
+            # if fps > 30:
+            #     frame_skip = HIGH_FRAME_SKIP  
+            # elif fps < 15:
+            #     frame_skip = LOW_FRAME_SKIP  
+            # else:
+            #     frame_skip =  DEFAULT_FRAME_SKIP
             
-            
-            fps = video.fps
-            if fps > 30:
-                frame_skip = HIGH_FRAME_SKIP  
-            elif fps < 15:
-                frame_skip = LOW_FRAME_SKIP  
-            else:
-                frame_skip =  DEFAULT_FRAME_SKIP
-            
+            frame_skip = DEFAULT_FRAME_SKIP
             time_limit = TIME_LIMIT
             max_detections_per_plate = MAX_DETECTIONS_PER_PLATE
             processed_plates = set()  # Track fully processed plates
