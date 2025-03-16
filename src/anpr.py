@@ -690,7 +690,7 @@ class ANPRProcessor:
             start_time = time.time()
             last_save_time = time.time()
             frame_skip = 3  # Process every nth frame
-            time_limit = 40  # Seconds to process video
+            time_limit = 30  # Seconds to process video
             max_detections_per_plate = 2  # Maximum times to detect each plate
             processed_plates = set()  # Track fully processed plates
                 
