@@ -29,10 +29,9 @@ def fetch_latest_records(conn):
     """Fetch the latest 100 records from the database."""
     with conn.cursor() as cursor:
         cursor.execute("""
-            SELECT start_time, end_time, license_plate, confidence, vehicle_type, vehicle_color, time_of_day, day_of_week
+            SELECT id, start_time, end_time, license_plate, confidence, vehicle_type, vehicle_color, time_of_day, day_of_week
             FROM license_plates2
-            ORDER BY end_time DESC
-            LIMIT 100
+            ORDER BY id ASC
         """)
         return cursor.fetchall()
 
@@ -49,7 +48,7 @@ def display_records(records):
     
     # Create a header line with colors
     header_line = (
-        f"{HEADER}{'Start Time':<20} | {'End Time':<20} | {'Number Plate':<15} | "
+        f"{HEADER}{'ID':<20} | {'Start Time':<20} | {'End Time':<20} | {'Number Plate':<15} | "
         f"{'Confidence':<10} | {'Vehicle Type':<15} | {'Vehicle Color':<15} | "
         f"{'Time of Day':<12} | {'Day of Week':<12}{ENDC}"
     )
@@ -58,9 +57,9 @@ def display_records(records):
     
     # Display each record in a neat row
     for record in records:
-        start_time, end_time, license_plate, confidence, vehicle_type, vehicle_color, time_of_day, day_of_week = record
+        id, start_time, end_time, license_plate, confidence, vehicle_type, vehicle_color, time_of_day, day_of_week = record
         row = (
-            f"{str(start_time):<20} | {str(end_time):<20} | {license_plate:<15} | "
+            f"{str(id):<20} | {str(start_time):<20} | {str(end_time):<20} | {license_plate:<15} | "
             f"{confidence:<10.2f} | {vehicle_type:<15} | {vehicle_color:<15} | "
             f"{time_of_day:<12} | {day_of_week:<12}"
         )
