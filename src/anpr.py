@@ -5,15 +5,13 @@ import re
 import logging
 import math
 import time
+import random
 from pathlib import Path
 import argparse
 from datetime import datetime, timedelta
 from collections import defaultdict
 from threading import Thread
 from queue import Queue
-
-from datetime import datetime, timedelta
-import colorsys
 
 import numpy as np
 from ultralytics import YOLO
@@ -54,8 +52,16 @@ MIN_DETECTIONS = 1
 TIME_LIMIT = 30 # Seconds to process video
 MAX_DETECTIONS_PER_PLATE = 2 # Maximum times to detect each plate
 DEFAULT_FRAME_SKIP = 5  # Default value (Process every nth frame)
-HIGH_FRAME_SKIP = 5 # Skip more frames for high FPS videos
-LOW_FRAME_SKIP = 1 # Process every frame for low FPS videos
+# HIGH_FRAME_SKIP = 5 # Skip more frames for high FPS videos
+# LOW_FRAME_SKIP = 1 # Process every frame for low FPS videos
+
+ADAPTIVE_FRAME_SKIP = True  # Enable dynamic frame skipping
+FRAME_SKIP_RANGES = {
+    'high_fps': (30, 3),    # For FPS > 30, skip 3 frames
+    'normal': (15, 1),       # For FPS 15-30, skip 1 frame
+    'low_fps': (0, 0)        # For FPS < 15, process all frames
+}
+
 
 # Generate unique output filename with timestamp
 def get_output_path(source_path=None):
@@ -128,12 +134,6 @@ class VideoProcessor:
 
         # Auto-generate output path
         self.output_path = get_output_path(source)
-        
-        # output_dir = Path(OUTPUT_PATH).parent
-        # output_dir.mkdir(parents=True, exist_ok=True)
-        # self.cap = cv2.VideoCapture(source)
-        # if not self.cap.isOpened():
-        #     raise ValueError(f"Could not open video source {source}")
             
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -147,7 +147,6 @@ class VideoProcessor:
             self.fps,
             (self.width, self.height)
         )
-
         
     def __enter__(self):
         return self
@@ -339,7 +338,7 @@ class ANPRProcessor:
         except Exception as e:
             logger.error(f"Color prediction error: {str(e)}")
             return "unknown"
-
+    
     #----------------------------------------------------------------------------------------------
     # Time Details
     #----------------------------------------------------------------------------------------------  
@@ -386,48 +385,7 @@ class ANPRProcessor:
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return thresh
-    
-    # def preprocess_plate(self, image):
-    #     """Enhanced preprocessing for better OCR results"""
-    #     # Check if image is valid
-    #     if image is None or image.size == 0:
-    #         return np.zeros((100, 100), dtype=np.uint8)
-            
-    #     # Maintain aspect ratio but normalize size
-    #     target_height = 80
-    #     ratio = image.shape[1] / image.shape[0]
-    #     target_width = int(target_height * ratio)
-    #     resized = cv2.resize(image, (target_width, target_height))
         
-    #     # Convert to grayscale
-    #     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        
-    #     # Try multiple preprocessing approaches
-    #     results = []
-        
-    #     # Approach 1: Adaptive thresholding
-    #     adaptive = cv2.adaptiveThreshold(
-    #         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-    #         cv2.THRESH_BINARY, 11, 2
-    #     )
-    #     results.append(adaptive)
-        
-    #     # Approach 2: CLAHE enhancement
-    #     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    #     enhanced = clahe.apply(gray)
-    #     _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    #     results.append(binary)
-        
-    #     # Approach 3: Edge enhancement
-    #     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    #     edges = cv2.Canny(blurred, 100, 200)
-    #     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    #     dilated = cv2.dilate(edges, kernel, iterations=1)
-    #     results.append(255 - dilated)  # Invert for OCR
-        
-    #     # Combine the approaches (stack them for OCR to try each)
-    #     return np.vstack(results)
-    
     #----------------------------------------------------------------------------------------------
     # OCR License Plate
     #----------------------------------------------------------------------------------------------
@@ -493,10 +451,6 @@ class ANPRProcessor:
         if not filtered_plates:
             logger.info("All plates filtered out due to unknown color")
             return
-
-        # if not plates_to_save:
-        #     logger.warning("No plates to save")
-        #     return
 
         conn = None
         try:
@@ -695,7 +649,7 @@ class ANPRProcessor:
             logger.critical(f"Frame processing failed: {str(e)}")
             self.running = False
             return frame
-        
+    
     #----------------------------------------------------------------------------------------------
     # Cleanup Tracker
     #----------------------------------------------------------------------------------------------
@@ -717,6 +671,81 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Process Video
     #----------------------------------------------------------------------------------------------
+    # def process_video(self):
+    #     """Main processing loop with optimized runtime controls"""
+    #     args = parse_arguments()
+    #     with VideoProcessor(args.source) as video:
+    #         logger.info("Starting video processing...")
+            
+    #         # Initialize timing and control variables
+    #         start_time = time.time()
+    #         last_save_time = time.time()
+            
+    #         frame_skip = DEFAULT_FRAME_SKIP
+    #         time_limit = TIME_LIMIT
+    #         max_detections_per_plate = MAX_DETECTIONS_PER_PLATE
+    #         processed_plates = set()  # Track fully processed plates
+                
+    #         for i, frame in enumerate(video.get_frames()):
+    #             # Check for early termination conditions
+    #             if frame is None:
+    #                 logger.error("Received empty frame - check video source")
+    #                 break
+                    
+    #             # Check if we've reached the time limit
+    #             elapsed_time = time.time() - start_time
+    #             if elapsed_time > time_limit:
+    #                 logger.info(f"Reached time limit of {time_limit} seconds")
+    #                 # Ensure final save before exiting
+    #                 self.save_to_database(self.plate_tracker)
+    #                 break
+                    
+    #             # Skip frames to reduce processing load
+    #             if i % frame_skip != 0:
+    #                 continue
+                    
+    #             # Progress logging
+    #             if i % 10 == 0:  # Log every 10 frames
+    #                 logger.info(f"Processing frame {i} (elapsed time: {elapsed_time:.2f}s)")
+                    
+    #             # Process the current frame
+    #             processed_frame = self.process_frame(frame)
+    #             video.write_frame(processed_frame)
+                
+    #             # Check for plates that reached detection threshold
+    #             for plate, data in list(self.plate_tracker.items()):
+    #                 if data['count'] >= max_detections_per_plate and plate not in processed_plates:
+    #                     logger.info(f"Plate {plate} reached detection threshold with {data['count']} detections")
+    #                     # Save this plate immediately
+    #                     self.save_to_database({plate: data})
+    #                     processed_plates.add(plate)
+    #                     # Option: remove from tracker to stop further processing
+    #                     # del self.plate_tracker[plate]
+                
+    #             # Periodically save to database (for plates not yet at threshold)
+    #             if time.time() - last_save_time > 10:
+    #                 logger.info(f"Current tracker has {len(self.plate_tracker)} plates")
+                    
+    #                 # Filter out plates we've already fully processed
+    #                 plates_to_save = {plate: data for plate, data in self.plate_tracker.items() 
+    #                                 if plate not in processed_plates}
+                    
+    #                 if plates_to_save:
+    #                     self.save_to_database(plates_to_save)
+    #                 last_save_time = time.time()
+                
+    #             # Cleanup plates not seen recently
+    #             self.cleanup_tracker()
+                
+    #             # Check for user quit
+    #             if cv2.waitKey(1) == ord('q'):
+    #                 logger.info("User requested exit")
+    #                 break
+            
+    #         # Final save to ensure we don't miss anything
+    #         logger.info("Video processing complete, saving final results")
+    #         self.save_to_database(self.plate_tracker)
+    
     def process_video(self):
         """Main processing loop with optimized runtime controls"""
         args = parse_arguments()
@@ -726,81 +755,74 @@ class ANPRProcessor:
             # Initialize timing and control variables
             start_time = time.time()
             last_save_time = time.time()
-            
-            # fps = video.fps
-            # if fps > 30:
-            #     frame_skip = HIGH_FRAME_SKIP  
-            # elif fps < 15:
-            #     frame_skip = LOW_FRAME_SKIP  
-            # else:
-            #     frame_skip =  DEFAULT_FRAME_SKIP
-            
+            frame_counter = 0  # Explicit frame counter initialization
+
+            # Dynamic frame skip initialization
+            fps = video.fps
             frame_skip = DEFAULT_FRAME_SKIP
-            time_limit = TIME_LIMIT
-            max_detections_per_plate = MAX_DETECTIONS_PER_PLATE
-            processed_plates = set()  # Track fully processed plates
-                
-            for i, frame in enumerate(video.get_frames()):
+            if ADAPTIVE_FRAME_SKIP:
+                if fps > 30:
+                    frame_skip = FRAME_SKIP_RANGES['high_fps'][1]
+                elif fps > 15:
+                    frame_skip = FRAME_SKIP_RANGES['normal'][1]
+                else:
+                    frame_skip = FRAME_SKIP_RANGES['low_fps'][1]
+
+            processed_plates = set()
+
+            for frame in video.get_frames():
                 # Check for early termination conditions
                 if frame is None:
                     logger.error("Received empty frame - check video source")
                     break
-                    
-                # Check if we've reached the time limit
+
+                # Add time limit check here
                 elapsed_time = time.time() - start_time
-                if elapsed_time > time_limit:
-                    logger.info(f"Reached time limit of {time_limit} seconds")
-                    # Ensure final save before exiting
+                if elapsed_time > TIME_LIMIT:
+                    logger.info(f"Reached time limit of {TIME_LIMIT} seconds")
                     self.save_to_database(self.plate_tracker)
                     break
-                    
-                # Skip frames to reduce processing load
-                if i % frame_skip != 0:
+
+                # Update frame counter
+                frame_counter += 1
+
+                # Skip frames based on dynamic skip rules
+                if frame_skip > 0 and (frame_counter % (frame_skip + random.randint(0, 2)) != 0):
                     continue
-                    
+
                 # Progress logging
-                if i % 10 == 0:  # Log every 10 frames
-                    logger.info(f"Processing frame {i} (elapsed time: {elapsed_time:.2f}s)")
-                    
+                if frame_counter % 10 == 0:
+                    logger.info(f"Processing frame {frame_counter} (Elapsed: {elapsed_time:.2f}s)")
+
                 # Process the current frame
                 processed_frame = self.process_frame(frame)
                 video.write_frame(processed_frame)
-                
-                # Check for plates that reached detection threshold
+
+                # Existing plate processing logic
                 for plate, data in list(self.plate_tracker.items()):
-                    if data['count'] >= max_detections_per_plate and plate not in processed_plates:
-                        logger.info(f"Plate {plate} reached detection threshold with {data['count']} detections")
-                        # Save this plate immediately
+                    if data['count'] >= MAX_DETECTIONS_PER_PLATE and plate not in processed_plates:
+                        logger.info(f"Plate {plate} reached detection threshold")
                         self.save_to_database({plate: data})
                         processed_plates.add(plate)
-                        # Option: remove from tracker to stop further processing
-                        # del self.plate_tracker[plate]
-                
-                # Periodically save to database (for plates not yet at threshold)
+
+                # Periodic database save
                 if time.time() - last_save_time > 10:
-                    logger.info(f"Current tracker has {len(self.plate_tracker)} plates")
-                    
-                    # Filter out plates we've already fully processed
-                    plates_to_save = {plate: data for plate, data in self.plate_tracker.items() 
-                                    if plate not in processed_plates}
-                    
+                    plates_to_save = {p: d for p, d in self.plate_tracker.items() if p not in processed_plates}
                     if plates_to_save:
                         self.save_to_database(plates_to_save)
                     last_save_time = time.time()
-                
-                # Cleanup plates not seen recently
+
+                # Cleanup and user input check
                 self.cleanup_tracker()
-                
-                # Check for user quit
                 if cv2.waitKey(1) == ord('q'):
                     logger.info("User requested exit")
                     break
-            
-            # Final save to ensure we don't miss anything
+
+            # Final save
             logger.info("Video processing complete, saving final results")
             self.save_to_database(self.plate_tracker)
-             
-               
+
+
 #----------------------------------------------------------------------------------------------
 #                                   Main Function
 #----------------------------------------------------------------------------------------------
