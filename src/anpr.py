@@ -39,17 +39,12 @@ PROJECT_ROOT = Path(__file__).parent.parent  # src -> project root
 OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# VIDEO_SOURCE="Resources/car_vid.mp4"
-# OUTPUT_PATH="output/annotated_video.mp4"
-
 VEHICLE_MODEL_PATH = "models/yolov8m-seg.pt" 
 MODEL_PATH="models/license_plate_detector.pt"
 # PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,10}$')  # Pre-compiled pattern
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 TRACKING_FRAMES=30
 MIN_CONFIDENCE=0.65
-PLATE_MERGE_DISTANCE=2
-MIN_TRACKING_DURATION=5
 MIN_DETECTIONS=1
 
 # Generate unique output filename with timestamp
@@ -175,7 +170,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Initialization
     #----------------------------------------------------------------------------------------------
-    
     def __init__(self):
         # Initialize components
         self.vehicle_model = YOLO(VEHICLE_MODEL_PATH)
@@ -312,7 +306,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Color
     #----------------------------------------------------------------------------------------------  
-    
     def predict_vehicle_color(self, cropped_image):
         """Predict vehicle color using trained model"""
         try:
@@ -336,11 +329,10 @@ class ANPRProcessor:
         except Exception as e:
             logger.error(f"Color prediction error: {str(e)}")
             return "unknown"
-    
+
     #----------------------------------------------------------------------------------------------
     # Time Details
     #----------------------------------------------------------------------------------------------  
-    
     def get_time_details(self):
         """Extract detailed timestamp information"""
         now = datetime.now()
@@ -378,7 +370,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Preprocess Plate
     #----------------------------------------------------------------------------------------------  
-    
     def preprocess_plate(self, image):
         """Preprocess image for better OCR results"""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -389,7 +380,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # OCR License Plate
     #----------------------------------------------------------------------------------------------
-    
     def ocr_license_plate(self, image):
         """Perform OCR on license plate image"""
         try:
@@ -429,7 +419,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Save to the Database
     #----------------------------------------------------------------------------------------------
-    
     def save_to_database(self, plates_to_save=None):
         """Modified database saving with new attributes"""
         plates_to_save = plates_to_save or self.plate_tracker
@@ -520,7 +509,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Process Frames
     #----------------------------------------------------------------------------------------------
-    
     def process_frame(self, frame):
         """Modified process_frame method to include new attributes"""
         try:
@@ -660,7 +648,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Cleanup Tracker
     #----------------------------------------------------------------------------------------------
-     
     def cleanup_tracker(self):
         """Cleanup old entries from tracker"""
         now = time.time()
@@ -679,7 +666,6 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Process Video
     #----------------------------------------------------------------------------------------------
-    
     def process_video(self):
         """Main processing loop with optimized runtime controls"""
         args = parse_arguments()
@@ -689,7 +675,16 @@ class ANPRProcessor:
             # Initialize timing and control variables for our own car
             start_time = time.time()
             last_save_time = time.time()
-            frame_skip = 3  # Process every nth frame
+            
+            fps = video.fps
+            if fps > 30:
+                frame_skip = 5  # Skip more frames for high FPS videos
+            elif fps < 15:
+                frame_skip = 1  # Process every frame for low FPS videos
+            else:
+                frame_skip = 3  # Default
+            
+            # frame_skip = 3  # Process every nth frame
             time_limit = 30  # Seconds to process video
             max_detections_per_plate = 2  # Maximum times to detect each plate
             processed_plates = set()  # Track fully processed plates
