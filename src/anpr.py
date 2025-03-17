@@ -31,6 +31,20 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 sys.path.append(os.path.abspath("src"))
 
+logger = logging.getLogger("ANPR")
+logger.setLevel(logging.DEBUG)
+
+# Clear any existing handlers
+if logger.hasHandlers():
+    logger.handlers.clear()
+
+# Create a new stream handler with a DEBUG level
+stream_handler = logging.StreamHandler()
+stream_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+
 from config.appconfig import (
     DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT,
 )
@@ -47,13 +61,11 @@ MODEL_PATH = "models/license_plate_detector.pt"
 # PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,10}$')  # Pre-compiled pattern
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 TRACKING_FRAMES = 30
-MIN_CONFIDENCE = 0.65
+MIN_CONFIDENCE = 0.30
 MIN_DETECTIONS = 1
 TIME_LIMIT = 30 # Seconds to process video
-MAX_DETECTIONS_PER_PLATE = 2 # Maximum times to detect each plate
+MAX_DETECTIONS_PER_PLATE = 4 # Maximum times to detect each plate
 DEFAULT_FRAME_SKIP = 5  # Default value (Process every nth frame)
-# HIGH_FRAME_SKIP = 5 # Skip more frames for high FPS videos
-# LOW_FRAME_SKIP = 1 # Process every frame for low FPS videos
 
 ADAPTIVE_FRAME_SKIP = True  # Enable dynamic frame skipping
 FRAME_SKIP_RANGES = {
@@ -82,6 +94,7 @@ def parse_arguments():
     )
     return parser.parse_args()
 
+
 db_params = {
     "host": DB_HOST,
     "database": DB_NAME,
@@ -103,14 +116,6 @@ COLOR_CLASSES = [
     'beige', 'black', 'blue', 'brown', 'gold', 'green', 'grey',
     'orange', 'pink', 'purple', 'red', 'silver', 'tan', 'white', 'yellow'
 ]
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("ANPR")
 
 class FixedDepthwiseConv2D(layers.DepthwiseConv2D):
     def __init__(self, *args, **kwargs):
@@ -147,6 +152,7 @@ class VideoProcessor:
             self.fps,
             (self.width, self.height)
         )
+        logger.info(f"Initialized VideoProcessor: source_type={self.source_type}, fps={self.fps}, resolution=({self.width}x{self.height})")
         
     def __enter__(self):
         return self
@@ -159,12 +165,14 @@ class VideoProcessor:
         self.cap.release()
         self.writer.release()
         cv2.destroyAllWindows()
+        logger.info("Released video resources.")
         
     def get_frames(self):
         """Generator that yields frames"""
         while self.cap.isOpened():
             ret, frame = self.cap.read()
             if not ret:
+                logger.debug("No more frames to read.")
                 break
             self.frame_count += 1
             yield frame
@@ -215,7 +223,7 @@ class ANPRProcessor:
         # Processing queue for multithreading
         self.queue = Queue(maxsize=10)
         self.running = True
-        # self._verify_db_schema()  # Add schema verification
+        logger.info("ANPRProcessor initialized.")
     
     #----------------------------------------------------------------------------------------------
     # Merge similar plates with Levenshtein distance
@@ -225,6 +233,7 @@ class ANPRProcessor:
         plate_text = re.sub(r'[^A-Z0-9]', '', plate_text.strip())
         
         if not plate_text:
+            logger.debug("Empty plate text after cleaning in _merge_similar_plates.")
             return ""
             
         # Common OCR error substitutions
@@ -239,6 +248,7 @@ class ANPRProcessor:
         
         # Generate normalized version for comparison
         normalized = ''.join([ocr_replacements.get(c, c) for c in plate_text])
+        logger.debug(f"Normalized plate text: Original='{plate_text}', Normalized='{normalized}'")
         
         # Check against existing plates
         for existing in list(self.plate_tracker.keys()):
@@ -251,6 +261,7 @@ class ANPRProcessor:
             
             # First check exact match
             if existing_normalized == normalized:
+                logger.debug(f"Merging plate: Exact match found for '{plate_text}' as '{existing}'")
                 return existing
                 
             # Then check Levenshtein distance (tighter threshold)
@@ -262,7 +273,9 @@ class ANPRProcessor:
                 letter_count = lambda s: sum(c.isalpha() for c in s)
                 if letter_count(plate_text) > letter_count(existing):
                     self.plate_tracker[plate_text] = self.plate_tracker.pop(existing)
+                    logger.debug(f"Merging plate: Replacing '{existing}' with '{plate_text}' based on letter count.")
                     return plate_text
+                logger.debug(f"Merging plate: Keeping existing plate '{existing}' for input '{plate_text}'.")
                 return existing
                 
         return plate_text
@@ -310,6 +323,9 @@ class ANPRProcessor:
                         'box': (x1, y1, x2, y2)
                     })
         
+        logger.debug(f"Vehicle detection: {len(detected_vehicles)} vehicles found.")
+        if not detected_vehicles:
+            logger.debug("No vehicles detected in this frame.")
         return detected_vehicles
     
     #----------------------------------------------------------------------------------------------
@@ -319,6 +335,7 @@ class ANPRProcessor:
         """Predict vehicle color using trained model"""
         try:
             if cropped_image.size == 0:
+                logger.debug("Empty cropped image in predict_vehicle_color.")
                 return "unknown"
                 
             # Preprocess image for color model
@@ -329,12 +346,12 @@ class ANPRProcessor:
 
             # Make prediction
             predictions = self.color_model.predict(img_array, verbose=0)[0]
+            logger.debug(f"Color model raw predictions: {predictions}")
             top_idx = np.argmax(predictions)
-            
-            # Only return if confidence meets threshold
-            if predictions[top_idx] > 0.5:
-                return COLOR_CLASSES[top_idx]
-            return "unknown"
+            predicted_color = COLOR_CLASSES[top_idx] if predictions[top_idx] > 0.3 else "unknown"
+            logger.debug(f"Predicted vehicle color: {predicted_color} with confidence {predictions[top_idx]:.2f}")
+            return predicted_color
+ 
         except Exception as e:
             logger.error(f"Color prediction error: {str(e)}")
             return "unknown"
@@ -380,10 +397,15 @@ class ANPRProcessor:
     # Preprocess Plate
     #----------------------------------------------------------------------------------------------  
     def preprocess_plate(self, image):
-        """Preprocess image for better OCR results"""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        # Option 1: Otsu thresholding (current)
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Option 2: Adaptive thresholding for better handling of uneven lighting
+        # thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        #                             cv2.THRESH_BINARY, 11, 2)
+        logger.debug("Preprocessed plate image for OCR using thresholding.")
         return thresh
         
     #----------------------------------------------------------------------------------------------
@@ -394,11 +416,11 @@ class ANPRProcessor:
         try:
             processed = self.preprocess_plate(image)
             result = self.ocr.ocr(processed, det=False, rec=True, cls=False)
+            logger.debug(f"OCR raw result: {result}")
             
             if not result:
                 return "", 0.0
                 
-            # Combine results with confidence
             texts = []
             confidences = []
             for line in result:
@@ -407,11 +429,10 @@ class ANPRProcessor:
                     texts.append(text)
                     confidences.append(conf)
             
-            # Clean and validate text
             combined = "".join(texts).upper()
             cleaned = re.sub(r'[^A-Z0-9]', '', combined)
+            logger.debug(f"OCR combined text: '{combined}' (length: {len(combined)}), cleaned text: '{cleaned}' (length: {len(cleaned)})")
             
-            # Nigerian plate length validation
             if len(cleaned) != 8:
                 logger.info(f"Rejected plate {cleaned} - invalid length {len(cleaned)}")
                 return "", 0.0
@@ -442,9 +463,9 @@ class ANPRProcessor:
         filtered_plates = {
             plate: data for plate, data in plates_to_save.items()
             if (
-                len(plate) == 8 and  # Nigerian plate length requirement
+                len(plate) == 8 and
                 data.get('vehicle_color', '').lower() != 'unknown' and
-                re.match(r'^[A-Z0-9]{8}$', plate)  # Final regex check
+                re.match(r'^[A-Z0-9]{8}$', plate)
             )
         }
         
@@ -520,12 +541,15 @@ class ANPRProcessor:
             if not hasattr(self, 'window_initialized'):
                 cv2.namedWindow("ANPR Processing", cv2.WINDOW_NORMAL)
                 self.window_initialized = True
+                logger.debug("Created OpenCV window 'ANPR Processing'.")
             
             # Get timestamp details once per frame
             time_details = self.get_time_details()
             
             # Detect vehicles first
             vehicles = self.detect_vehicle_type(frame)
+            for vehicle in vehicles:
+                logger.debug(f"Vehicle details: {vehicle}")
             
             # Original license plate detection
             results = self.model.predict(frame, conf=MIN_CONFIDENCE, verbose=False)
@@ -539,19 +563,51 @@ class ANPRProcessor:
                 for box in boxes:
                     try:
                         x1, y1, x2, y2 = map(int, box)
-                        plate_img = frame[y1:y2, x1:x2]
+                        # Compute margins (10% of width/height)
+                        margin_x = int((x2 - x1) * 0.1)
+                        margin_y = int((y2 - y1) * 0.1)
+                        # Adjust coordinates safely
+                        x1_adj = max(x1 - margin_x, 0)
+                        y1_adj = max(y1 - margin_y, 0)
+                        x2_adj = min(x2 + margin_x, frame.shape[1])
+                        y2_adj = min(y2 + margin_y, frame.shape[0])
+                        plate_img = frame[y1_adj:y2_adj, x1_adj:x2_adj]
+                        logger.debug(f"Adjusted plate bounding box: {(x1_adj, y1_adj, x2_adj, y2_adj)}; Cropped image shape: {plate_img.shape}")
+                        
+                        if logger.isEnabledFor(logging.DEBUG):
+                            debug_plate_path = OUTPUT_DIR / f"debug_plate_{int(time.time()*1000)}.jpg"
+                            cv2.imwrite(str(debug_plate_path), plate_img)
+                            logger.debug(f"Saved debug plate image to {debug_plate_path}")
                         
                         # OCR Processing with validation
                         plate_text, plate_conf = self.ocr_license_plate(plate_img)
                         logger.info(f"OCR result: '{plate_text}' with confidence {plate_conf}")
                         
                         now = time.time()
-                        if plate_text and (plate_text in self.plate_history):
-                            last_seen = self.plate_history[plate_text]
-                            if now - last_seen < self.cooldown_period:
-                                logger.info(f"Skipping plate {plate_text} - in cooldown period")
-                                continue
-                        self.plate_history[plate_text] = now
+                        # if plate_text:
+                        #     if plate_text in self.plate_history:
+                        #         last_seen = self.plate_history[plate_text]
+                        #         if now - last_seen < self.cooldown_period:
+                        #             logger.info(f"Skipping plate {plate_text} - in cooldown period (last seen {now - last_seen:.2f}s ago)")
+                        #             continue
+                        # else:
+                        #     logger.debug("Empty OCR result received, skipping further processing for this box.")
+                        #     continue
+                            
+                        # self.plate_history[plate_text] = now
+                        
+                        if plate_text:
+                            if plate_text in self.plate_history:
+                                last_seen = self.plate_history[plate_text]
+                                if now - last_seen < self.cooldown_period:
+                                    logger.info(f"Plate {plate_text} re-detected within cooldown (last seen {now - last_seen:.2f}s); updating tracker count.")
+                                    tracker_entry = self.plate_tracker.get(plate_text, {})
+                                    tracker_entry['count'] = tracker_entry.get('count', 0) + 1
+                                    tracker_entry['last_seen'] = now
+                                    self.plate_tracker[plate_text] = tracker_entry
+                                    continue  # Skip heavy processing but count is updated.
+                            self.plate_history[plate_text] = now
+
                         
                         if not plate_text or plate_conf < MIN_CONFIDENCE:
                             logger.info(f"Plate rejected: empty text or low confidence {plate_conf}")
@@ -593,8 +649,8 @@ class ANPRProcessor:
                         # Add this color validation check RIGHT HERE
                         # =================================================================
                         if vehicle_color.lower() == "unknown":
-                            logger.info(f"Skipping plate {merged_plate} - unknown color")
-                            continue  # This skips the entire plate processing
+                            logger.warning(f"Plate {merged_plate} detected with valid OCR but vehicle color is unknown; consider adjusting threshold.")
+                            # continue
                         
                         # Update tracker with new attributes
                         now = time.time()
@@ -621,7 +677,6 @@ class ANPRProcessor:
                                 f"{merged_plate} ({self.plate_tracker[merged_plate]['max_confidence']:.2f})",
                                 (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                         
-                        # Add vehicle type and color to visualization
                         cv2.putText(frame, 
                                 f"{vehicle_color} {vehicle_type}",
                                 (x1, y1 - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
@@ -642,6 +697,7 @@ class ANPRProcessor:
             key = cv2.waitKey(1)
             if key == ord('q'):
                 self.running = False
+                logger.info("User requested exit via key press.")
                 
             return frame
         
@@ -660,10 +716,9 @@ class ANPRProcessor:
                 if now - data['last_seen'] > TRACKING_FRAMES]
                 
         if expired:
-            logger.info(f"Cleaning up {len(expired)} expired plates")
+            logger.info(f"Cleaning up {len(expired)} expired plates.")
             
         for plate in expired:
-            # Only remove if it's been detected enough times and save it
             if self.plate_tracker[plate].get('count', 0) >= MIN_DETECTIONS:
                 self.save_to_database({plate: self.plate_tracker[plate]})
             del self.plate_tracker[plate]
@@ -756,17 +811,19 @@ class ANPRProcessor:
             start_time = time.time()
             last_save_time = time.time()
             frame_counter = 0  # Explicit frame counter initialization
+            
+            def adjust_frame_skip(fps):
+                if fps > 30:
+                    return FRAME_SKIP_RANGES['high_fps'][1]
+                elif fps > 15:
+                    return FRAME_SKIP_RANGES['normal'][1]
+                else:
+                    return FRAME_SKIP_RANGES['low_fps'][1]
 
             # Dynamic frame skip initialization
             fps = video.fps
-            frame_skip = DEFAULT_FRAME_SKIP
-            if ADAPTIVE_FRAME_SKIP:
-                if fps > 30:
-                    frame_skip = FRAME_SKIP_RANGES['high_fps'][1]
-                elif fps > 15:
-                    frame_skip = FRAME_SKIP_RANGES['normal'][1]
-                else:
-                    frame_skip = FRAME_SKIP_RANGES['low_fps'][1]
+            frame_skip = adjust_frame_skip(fps)
+            logger.info(f"Dynamic frame skip set to {frame_skip} for fps={fps}")
 
             processed_plates = set()
 
@@ -785,9 +842,11 @@ class ANPRProcessor:
 
                 # Update frame counter
                 frame_counter += 1
-
-                # Skip frames based on dynamic skip rules
-                if frame_skip > 0 and (frame_counter % (frame_skip + random.randint(0, 2)) != 0):
+                
+                # Skip frames based on dynamic skip rules with randomness for load balancing
+                random_offset = random.randint(0, 2)
+                if frame_skip > 0 and (frame_counter % (frame_skip + random_offset) != 0):
+                    logger.debug(f"Skipping frame {frame_counter} with frame_skip value {frame_skip} and random offset {random_offset}")
                     continue
 
                 # Progress logging
@@ -807,13 +866,16 @@ class ANPRProcessor:
 
                 # Periodic database save
                 if time.time() - last_save_time > 10:
+                    logger.info(f"Current tracker has {len(self.plate_tracker)} plates")
                     plates_to_save = {p: d for p, d in self.plate_tracker.items() if p not in processed_plates}
                     if plates_to_save:
                         self.save_to_database(plates_to_save)
                     last_save_time = time.time()
 
+
                 # Cleanup and user input check
                 self.cleanup_tracker()
+                
                 if cv2.waitKey(1) == ord('q'):
                     logger.info("User requested exit")
                     break
@@ -828,16 +890,18 @@ class ANPRProcessor:
 #----------------------------------------------------------------------------------------------
 def main():
     args = parse_arguments()
+    logger.info(f"Starting ANPR system with source: {args.source}")
     processor = ANPRProcessor()
     try:
         with VideoProcessor(args.source) as video:
             processor.process_video()
     except KeyboardInterrupt:
-        logger.info("Shutting down...")
+        logger.info("Shutting down due to KeyboardInterrupt...")
     except Exception as e:
         logger.error(f"Video processing failed: {str(e)}")
     finally:
         processor.db_pool.closeall()
+        logger.info("Database connections closed.")
 
 if __name__ == "__main__":
     main()

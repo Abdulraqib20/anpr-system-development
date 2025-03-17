@@ -3720,6 +3720,7 @@ class ANPRProcessor:
                 
         return True
     
+
     def process_frame(self, frame):
         """Modified process_frame method with enhanced validation and association"""
         try:
