@@ -8,7 +8,7 @@ import time
 import random
 from pathlib import Path
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
 from threading import Thread
 from queue import Queue
@@ -58,19 +58,19 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 VEHICLE_MODEL_PATH = "models/yolov8m-seg.pt" 
 MODEL_PATH = "models/license_plate_detector.pt"
-# PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,10}$')  # Pre-compiled pattern
-PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
-TRACKING_FRAMES = 30
+# PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
+PLATE_REGEX = re.compile(r'^[A-Z0-9]{6,}$')
+TRACKING_FRAMES = 15
 MIN_CONFIDENCE = 0.30
 MIN_DETECTIONS = 1
 TIME_LIMIT = 30 # Seconds to process video
 MAX_DETECTIONS_PER_PLATE = 4 # Maximum times to detect each plate
-DEFAULT_FRAME_SKIP = 5  # Default value (Process every nth frame)
+# DEFAULT_FRAME_SKIP = 5  # Default value (Process every nth frame)
 
 ADAPTIVE_FRAME_SKIP = True  # Enable dynamic frame skipping
 FRAME_SKIP_RANGES = {
-    'high_fps': (30, 3),    # For FPS > 30, skip 3 frames
-    'normal': (15, 1),       # For FPS 15-30, skip 1 frame
+    'high_fps': (30, 5),    # For FPS > 30, skip 3 frames
+    'normal': (15, 2),       # For FPS 15-30, skip 1 frame
     'low_fps': (0, 0)        # For FPS < 15, process all frames
 }
 
@@ -143,6 +143,7 @@ class VideoProcessor:
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.frame_count = 0
         
         # Initialize video writer
@@ -152,8 +153,8 @@ class VideoProcessor:
             self.fps,
             (self.width, self.height)
         )
-        logger.info(f"Initialized VideoProcessor: source_type={self.source_type}, fps={self.fps}, resolution=({self.width}x{self.height})")
         
+        logger.info(f"Initialized VideoProcessor: source_type={self.source_type}, fps={self.fps}, resolution=({self.width}x{self.height}), total_frames={self.total_frames}")        
     def __enter__(self):
         return self
         
@@ -191,7 +192,8 @@ class ANPRProcessor:
         # Initialize components
         self.vehicle_model = YOLO(VEHICLE_MODEL_PATH)
         self.model = YOLO(MODEL_PATH)
-        self.ocr = PaddleOCR(use_angle_cls=True, use_gpu=False)
+        # self.ocr = PaddleOCR(use_angle_cls=True, lang='en', det=False, rec=True, use_gpu=False, rec_char_type='en')
+        self.ocr = PaddleOCR(use_angle_cls=True, use_gpu=False, lang='en', det=False, rec_only=True)  
         self.plate_tracker = defaultdict(lambda: {
             'count': 0, 
             'confidence': 0, 
@@ -228,76 +230,77 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Merge similar plates with Levenshtein distance
     #----------------------------------------------------------------------------------------------  
-    def _merge_similar_plates(self, plate_text):
-        """Enhanced plate merging with length validation and OCR error handling"""
-        plate_text = re.sub(r'[^A-Z0-9]', '', plate_text.strip())
+    
+    # def _merge_similar_plates(self, plate_text):
+    #     """Enhanced plate merging with length validation and OCR error handling"""
+    #     plate_text = re.sub(r'[^A-Z0-9]', '', plate_text.strip())
         
-        if not plate_text:
-            logger.debug("Empty plate text after cleaning in _merge_similar_plates.")
-            return ""
+    #     if not plate_text:
+    #         logger.debug("Empty plate text after cleaning in _merge_similar_plates.")
+    #         return ""
             
-        # Common OCR error substitutions
-        ocr_replacements = {
-            '8': 'B',
-            '5': 'S',
-            '0': 'O',
-            '1': 'I',
-            '2': 'Z',
-            '6': 'G'
-        }
+    #     # Common OCR error substitutions
+    #     ocr_replacements = {
+    #         '8': 'B',
+    #         '5': 'S',
+    #         '0': 'O',
+    #         '1': 'I',
+    #         '2': 'Z',
+    #         '6': 'G'
+    #     }
         
-        # Generate normalized version for comparison
-        normalized = ''.join([ocr_replacements.get(c, c) for c in plate_text])
-        logger.debug(f"Normalized plate text: Original='{plate_text}', Normalized='{normalized}'")
+    #     # Generate normalized version for comparison
+    #     normalized = ''.join([ocr_replacements.get(c, c) for c in plate_text])
+    #     logger.debug(f"Normalized plate text: Original='{plate_text}', Normalized='{normalized}'")
         
-        # Check against existing plates
-        for existing in list(self.plate_tracker.keys()):
-            # Length must match exactly
-            if len(existing) != len(plate_text):
-                continue
+    #     # Check against existing plates
+    #     for existing in list(self.plate_tracker.keys()):
+    #         # Length must match exactly
+    #         if len(existing) != len(plate_text):
+    #             continue
                 
-            # Generate normalized existing plate
-            existing_normalized = ''.join([ocr_replacements.get(c, c) for c in existing])
+    #         # Generate normalized existing plate
+    #         existing_normalized = ''.join([ocr_replacements.get(c, c) for c in existing])
             
-            # First check exact match
-            if existing_normalized == normalized:
-                logger.debug(f"Merging plate: Exact match found for '{plate_text}' as '{existing}'")
-                return existing
+    #         # First check exact match
+    #         if existing_normalized == normalized:
+    #             logger.debug(f"Merging plate: Exact match found for '{plate_text}' as '{existing}'")
+    #             return existing
                 
-            # Then check Levenshtein distance (tighter threshold)
-            distance = self._levenshtein_distance(existing_normalized, normalized)
-            max_allowed = 1 if len(plate_text) > 6 else 0  # Allow 1 error for longer plates
+    #         # Then check Levenshtein distance (tighter threshold)
+    #         distance = self._levenshtein_distance(existing_normalized, normalized)
+    #         max_allowed = 1 if len(plate_text) > 6 else 0  # Allow 1 error for longer plates
             
-            if distance <= max_allowed:
-                # Prefer plate with more letters (reduces 0 vs O conflicts)
-                letter_count = lambda s: sum(c.isalpha() for c in s)
-                if letter_count(plate_text) > letter_count(existing):
-                    self.plate_tracker[plate_text] = self.plate_tracker.pop(existing)
-                    logger.debug(f"Merging plate: Replacing '{existing}' with '{plate_text}' based on letter count.")
-                    return plate_text
-                logger.debug(f"Merging plate: Keeping existing plate '{existing}' for input '{plate_text}'.")
-                return existing
+    #         if distance <= max_allowed:
+    #             # Prefer plate with more letters (reduces 0 vs O conflicts)
+    #             letter_count = lambda s: sum(c.isalpha() for c in s)
+    #             if letter_count(plate_text) > letter_count(existing):
+    #                 self.plate_tracker[plate_text] = self.plate_tracker.pop(existing)
+    #                 logger.debug(f"Merging plate: Replacing '{existing}' with '{plate_text}' based on letter count.")
+    #                 return plate_text
+    #             logger.debug(f"Merging plate: Keeping existing plate '{existing}' for input '{plate_text}'.")
+    #             return existing
                 
-        return plate_text
+    #     return plate_text
 
-    def _levenshtein_distance(self, s1, s2):
-        """Calculate Levenshtein distance between two strings"""
-        if len(s1) < len(s2):
-            return self._levenshtein_distance(s2, s1)
-        if len(s2) == 0:
-            return len(s1)
+    # def _levenshtein_distance(self, s1, s2):
+    #     """Calculate Levenshtein distance between two strings"""
+    #     if len(s1) < len(s2):
+    #         return self._levenshtein_distance(s2, s1)
+    #     if len(s2) == 0:
+    #         return len(s1)
         
-        previous_row = range(len(s2) + 1)
-        for i, c1 in enumerate(s1):
-            current_row = [i + 1]
-            for j, c2 in enumerate(s2):
-                insertions = previous_row[j + 1] + 1
-                deletions = current_row[j] + 1
-                substitutions = previous_row[j] + (c1 != c2)
-                current_row.append(min(insertions, deletions, substitutions))
-            previous_row = current_row
+    #     previous_row = range(len(s2) + 1)
+    #     for i, c1 in enumerate(s1):
+    #         current_row = [i + 1]
+    #         for j, c2 in enumerate(s2):
+    #             insertions = previous_row[j + 1] + 1
+    #             deletions = current_row[j] + 1
+    #             substitutions = previous_row[j] + (c1 != c2)
+    #             current_row.append(min(insertions, deletions, substitutions))
+    #         previous_row = current_row
         
-        return previous_row[-1]
+    #     return previous_row[-1]
     
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Type
@@ -396,31 +399,325 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Preprocess Plate
     #----------------------------------------------------------------------------------------------  
+    
+    #-------------------------------Function 1-----------------------------------------------------#
+    # def preprocess_plate(self, image):
+    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    #     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    #     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    #     logger.debug("Preprocessed plate image for OCR using thresholding.")
+    #     return thresh
+    
+    #-------------------------------Function 2-----------------------------------------------------#
+    # def preprocess_plate(self, image):
+    #     """Enhanced preprocessing for license plate OCR"""
+    #     # Check if image is valid
+    #     if image.size == 0 or image is None:
+    #         logger.error("Empty image received for preprocessing")
+    #         return np.zeros((100, 100), dtype=np.uint8)  # Return empty image
+            
+    #     # Step 1: Resize for consistency if the plate is too small
+    #     h, w = image.shape[:2]
+    #     min_width = 200  # Minimum width for good OCR performance
+        
+    #     if w < min_width:
+    #         scale_factor = min_width / w
+    #         new_h = int(h * scale_factor)
+    #         image = cv2.resize(image, (min_width, new_h), interpolation=cv2.INTER_CUBIC)
+    #         logger.debug(f"Resized small plate from {w}x{h} to {min_width}x{new_h}")
+        
+    #     # Step 2: Convert to grayscale
+    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+    #     # Step 3: Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    #     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    #     gray = clahe.apply(gray)
+        
+    #     # Step 4: Noise reduction with bilateral filter (preserves edges better)
+    #     blurred = cv2.bilateralFilter(gray, 11, 17, 17)
+        
+    #     # Step 5: Try different thresholding methods and select best
+    #     # Option 1: Otsu thresholding
+    #     _, thresh_otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+    #     # Option 2: Adaptive thresholding for uneven lighting
+    #     thresh_adaptive = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    #                                 cv2.THRESH_BINARY, 11, 2)
+        
+    #     # Combine them - adaptive generally works better for text with uneven lighting
+    #     final_thresh = thresh_adaptive
+        
+    #     # Step 6: Morphological operations to enhance text
+    #     # Create a small rectangular kernel
+    #     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        
+    #     # Clean small noise with opening operation
+    #     final_thresh = cv2.morphologyEx(final_thresh, cv2.MORPH_OPEN, kernel)
+        
+    #     # Connect broken characters
+    #     final_thresh = cv2.morphologyEx(final_thresh, cv2.MORPH_CLOSE, kernel)
+        
+    #     # Save intermediate images for debugging if enabled
+    #     if logger.isEnabledFor(logging.DEBUG):
+    #         debug_path = OUTPUT_DIR / f"preprocess_debug_{int(time.time()*1000)}"
+    #         cv2.imwrite(f"{debug_path}_original.jpg", image)
+    #         cv2.imwrite(f"{debug_path}_clahe.jpg", gray)
+    #         cv2.imwrite(f"{debug_path}_bilateral.jpg", blurred)
+    #         cv2.imwrite(f"{debug_path}_otsu.jpg", thresh_otsu)
+    #         cv2.imwrite(f"{debug_path}_adaptive.jpg", thresh_adaptive)
+    #         cv2.imwrite(f"{debug_path}_final.jpg", final_thresh)
+    #         logger.debug(f"Saved preprocessing debug images to {debug_path}_*.jpg")
+            
+    #     logger.debug("Enhanced preprocessing complete for plate image")
+    #     return final_thresh
+    
+    #-------------------------------Function 3-----------------------------------------------------#
+    # def preprocess_plate(self, image):
+    #     """
+    #     Preprocess the plate image to enhance OCR performance.
+    #     This version adapts techniques from a Tesseract-based pipeline:
+    #     - Resize image using cubic interpolation.
+    #     - Convert to grayscale (if not already).
+    #     - Apply Gaussian and median blurs.
+    #     - Perform Otsu thresholding with binary inversion.
+    #     - Apply morphological dilation.
+    #     """
+    #     # Resize the image by a factor of 3 for better detail
+    #     resized = cv2.resize(image, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        
+    #     # Convert to grayscale if the image is in color
+    #     if len(resized.shape) == 3:
+    #         gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    #     else:
+    #         gray = resized
+        
+    #     # Apply Gaussian blur with a 5x5 kernel to reduce noise
+    #     blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+    #     # Apply median blur with kernel size 3 to further smooth the image
+    #     median = cv2.medianBlur(blur, 3)
+        
+    #     # Perform Otsu thresholding with binary inverse to create a high-contrast image
+    #     ret, thresh = cv2.threshold(median, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
+        
+    #     # Create a rectangular kernel and apply dilation to emphasize text regions
+    #     rect_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    #     dilation = cv2.dilate(thresh, rect_kern, iterations=1)
+        
+    #     return dilation
+
+    #--------------------------------Function 4----------------------------------------------------#
+    # def preprocess_plate(self, image):
+    #     """
+    #     Preprocess the license plate image to enhance OCR performance.
+        
+    #     Steps:
+    #     - Resize (scale up) the image to add detail.
+    #     - Convert to grayscale.
+    #     - Apply Gaussian and median blurring to reduce noise.
+    #     - Use adaptive thresholding (binary inverse) to produce high contrast.
+    #     - Apply morphological dilation to enhance the character regions.
+    #     """
+    #     # Resize the image by a factor of 3 for more detail
+    #     resized = cv2.resize(image, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        
+    #     # Ensure the image is grayscale
+    #     if len(resized.shape) == 3:
+    #         gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    #     else:
+    #         gray = resized
+        
+    #     # Apply Gaussian blur to smooth out noise
+    #     blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+    #     # Apply median blur for additional noise reduction
+    #     median = cv2.medianBlur(blur, 3)
+        
+    #     # Use adaptive thresholding to generate a high-contrast image (binary inverse)
+    #     thresh = cv2.adaptiveThreshold(median, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    #                                 cv2.THRESH_BINARY_INV, 11, 2)
+        
+    #     # Create a rectangular structuring element and apply dilation to enhance characters
+    #     rect_kern = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    #     dilation = cv2.dilate(thresh, rect_kern, iterations=1)
+        
+    #     return dilation
+
     def preprocess_plate(self, image):
+        """Preprocess image for better OCR results"""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        # Option 1: Otsu thresholding (current)
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Option 2: Adaptive thresholding for better handling of uneven lighting
-        # thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        #                             cv2.THRESH_BINARY, 11, 2)
-        logger.debug("Preprocessed plate image for OCR using thresholding.")
         return thresh
-        
+            
     #----------------------------------------------------------------------------------------------
     # OCR License Plate
     #----------------------------------------------------------------------------------------------
+    # def ocr_license_plate(self, image):
+    #     """Perform OCR on license plate image"""
+    #     try:
+    #         processed = self.preprocess_plate(image)
+    #         result = self.ocr.ocr(processed, det=False, rec=False, cls=False)
+    #         logger.debug(f"OCR raw result: {result}")
+            
+    #         if not result:
+    #             return "", 0.0
+                
+    #         texts = []
+    #         confidences = []
+    #         for line in result:
+    #             if line and line[0]:
+    #                 text, conf = line[0]
+    #                 texts.append(text)
+    #                 confidences.append(conf)
+            
+    #         combined = "".join(texts).upper()
+    #         cleaned = re.sub(r'[^A-Z0-9]', '', combined)
+    #         logger.debug(f"OCR combined text: '{combined}' (length: {len(combined)}), cleaned text: '{cleaned}' (length: {len(cleaned)})")
+            
+    #         # if len(cleaned) != 8:
+    #         #     logger.info(f"Rejected plate {cleaned} - invalid length {len(cleaned)}")
+    #         #     return "", 0.0
+            
+    #         if len(cleaned) < 6:
+    #             logger.info(f"Rejected plate {cleaned} - invalid length {len(cleaned)}")
+    #             return "", 0.0
+
+    #         if PLATE_REGEX.fullmatch(cleaned):
+    #             avg_conf = sum(confidences) / len(confidences)
+    #             return cleaned, avg_conf
+    #         else:
+    #             return "", 0.0
+            
+    #     except Exception as e:
+    #         logger.error(f"OCR Error: {str(e)}")
+    #         return "", 0.0
+
+    # def ocr_license_plate(self, image):
+    #     """Enhanced OCR with multiple preprocessing strategies"""
+    #     try:
+    #         if image.size == 0 or image is None:
+    #             logger.error("Empty image received for OCR")
+    #             return "", 0.0
+                
+    #         # Create multiple versions of the preprocessed image
+    #         processed_standard = self.preprocess_plate(image)
+            
+    #         # Create inverted version (sometimes works better)
+    #         processed_inverted = cv2.bitwise_not(processed_standard)
+            
+    #         # Create a sharpened version of the original
+    #         kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    #         sharpened = cv2.filter2D(image, -1, kernel)
+    #         processed_sharp = self.preprocess_plate(sharpened)
+            
+    #         # Try OCR on all versions
+    #         versions = [
+    #             ("standard", processed_standard),
+    #             ("inverted", processed_inverted),
+    #             ("sharpened", processed_sharp)
+    #         ]
+            
+    #         best_text = ""
+    #         best_conf = 0.0
+            
+    #         for version_name, img in versions:
+    #             result = self.ocr.ocr(img, det=False, rec=True, cls=False)
+    #             logger.debug(f"OCR {version_name} raw result: {result}")
+                
+    #             if not result:
+    #                 continue
+                    
+    #             texts = []
+    #             confidences = []
+    #             for line in result:
+    #                 if line and line[0]:
+    #                     text, conf = line[0]
+    #                     texts.append(text)
+    #                     confidences.append(conf)
+                
+    #             if not texts:
+    #                 continue
+                    
+    #             combined = "".join(texts).upper()
+    #             cleaned = re.sub(r'[^A-Z0-9]', '', combined)
+    #             avg_conf = sum(confidences) / len(confidences) if confidences else 0
+                
+    #             logger.debug(f"OCR {version_name} text: '{cleaned}' (conf: {avg_conf:.2f})")
+                
+    #             # If we found a valid plate with higher confidence, use it
+    #             if PLATE_REGEX.fullmatch(cleaned) and avg_conf > best_conf:
+    #                 best_text = cleaned
+    #                 best_conf = avg_conf
+    #                 logger.info(f"Found valid plate ({version_name}): {best_text} with conf {best_conf:.2f}")
+            
+    #         # If we found a valid plate, return it
+    #         if best_text:
+    #             return best_text, best_conf
+                
+    #         # If no valid plate was found but we have partially valid results, 
+    #         # log them for debugging
+    #         if texts:
+    #             logger.info(f"OCR found text but not valid plate: {cleaned} (length: {len(cleaned)})")
+                
+    #         return "", 0.0
+                
+    #     except Exception as e:
+    #         logger.error(f"OCR Error: {str(e)}")
+    #         return "", 0.0
+    
+    # def ocr_license_plate(self, image):
+    #     """
+    #     Perform OCR on the preprocessed license plate image.
+    #     Uses the improved preprocessing to enhance text recognition.
+    #     """
+    #     try:
+    #         # Preprocess the image with our updated function
+    #         processed = self.preprocess_plate(image)
+            
+    #         # Get OCR results (using PaddleOCR in this case)
+    #         result = self.ocr.ocr(processed, det=False, rec=True, cls=False)
+    #         logger.debug(f"OCR raw result: {result}")
+            
+    #         if not result:
+    #             return "", 0.0
+            
+    #         texts = []
+    #         confidences = []
+    #         for line in result:
+    #             if line and line[0]:
+    #                 text, conf = line[0]
+    #                 texts.append(text)
+    #                 confidences.append(conf)
+            
+    #         # Combine the texts, convert to uppercase and clean up unwanted characters
+    #         combined = "".join(texts).upper()
+    #         cleaned = re.sub(r'[^A-Z0-9]', '', combined)
+    #         logger.debug(f"OCR combined text: '{combined}' (length: {len(combined)}), cleaned text: '{cleaned}' (length: {len(cleaned)})")
+            
+    #         # Accept if cleaned text has at least 6 characters
+    #         if len(cleaned) < 6:
+    #             logger.info(f"Rejected plate {cleaned} - invalid length {len(cleaned)}")
+    #             return "", 0.0
+            
+    #         # Calculate average confidence
+    #         avg_conf = sum(confidences) / len(confidences)
+    #         return cleaned, avg_conf
+                
+    #     except Exception as e:
+    #         logger.error(f"OCR Error: {str(e)}")
+    #         return "", 0.0
+
     def ocr_license_plate(self, image):
         """Perform OCR on license plate image"""
         try:
             processed = self.preprocess_plate(image)
             result = self.ocr.ocr(processed, det=False, rec=True, cls=False)
-            logger.debug(f"OCR raw result: {result}")
             
             if not result:
                 return "", 0.0
                 
+            # Combine results with confidence
             texts = []
             confidences = []
             for line in result:
@@ -428,14 +725,10 @@ class ANPRProcessor:
                     text, conf = line[0]
                     texts.append(text)
                     confidences.append(conf)
-            
+                    
+            # Clean and validate text
             combined = "".join(texts).upper()
             cleaned = re.sub(r'[^A-Z0-9]', '', combined)
-            logger.debug(f"OCR combined text: '{combined}' (length: {len(combined)}), cleaned text: '{cleaned}' (length: {len(cleaned)})")
-            
-            if len(cleaned) != 8:
-                logger.info(f"Rejected plate {cleaned} - invalid length {len(cleaned)}")
-                return "", 0.0
             
             if PLATE_REGEX.fullmatch(cleaned):
                 avg_conf = sum(confidences) / len(confidences)
@@ -445,7 +738,7 @@ class ANPRProcessor:
         except Exception as e:
             logger.error(f"OCR Error: {str(e)}")
             return "", 0.0
-
+        
     #----------------------------------------------------------------------------------------------
     # Save to the Database
     #----------------------------------------------------------------------------------------------
@@ -453,19 +746,13 @@ class ANPRProcessor:
         """Modified database saving with new attributes"""
         plates_to_save = plates_to_save or self.plate_tracker
         
-        # # Strict color filtering
-        # filtered_plates = {
-        #     plate: data for plate, data in plates_to_save.items()
-        #     if data.get('vehicle_color', '').lower() != 'unknown'
-        # }
-        
         # Nigerian plate validation filters
         filtered_plates = {
             plate: data for plate, data in plates_to_save.items()
             if (
-                len(plate) == 8 and
+                len(plate) >= 6 and
                 data.get('vehicle_color', '').lower() != 'unknown' and
-                re.match(r'^[A-Z0-9]{8}$', plate)
+                re.match(r'^[A-Z0-9]{6,}$', plate)
             )
         }
         
@@ -564,13 +851,29 @@ class ANPRProcessor:
                     try:
                         x1, y1, x2, y2 = map(int, box)
                         # Compute margins (10% of width/height)
-                        margin_x = int((x2 - x1) * 0.1)
-                        margin_y = int((y2 - y1) * 0.1)
-                        # Adjust coordinates safely
+                        # margin_x = int((x2 - x1) * 0.1)
+                        # margin_y = int((y2 - y1) * 0.1)
+                        # # Adjust coordinates safely
+                        # x1_adj = max(x1 - margin_x, 0)
+                        # y1_adj = max(y1 - margin_y, 0)
+                        # x2_adj = min(x2 + margin_x, frame.shape[1])
+                        # y2_adj = min(y2 + margin_y, frame.shape[0])
+                        
+                        # Adjust inside your process_frame method where plate cropping happens
+                        margin_x = int((x2 - x1) * 0.15)  # Increase from 0.1 to 0.15
+                        margin_y = int((y2 - y1) * 0.15)  # Increase from 0.1 to 0.15
+
+                        # Add minimum margin in pixels to handle very small detections
+                        min_margin = 10  # Minimum 10 pixels on each side
+                        margin_x = max(margin_x, min_margin)
+                        margin_y = max(margin_y, min_margin)
+
+                        # Ensure we're not exceeding image boundaries
                         x1_adj = max(x1 - margin_x, 0)
                         y1_adj = max(y1 - margin_y, 0)
                         x2_adj = min(x2 + margin_x, frame.shape[1])
                         y2_adj = min(y2 + margin_y, frame.shape[0])
+                        
                         plate_img = frame[y1_adj:y2_adj, x1_adj:x2_adj]
                         logger.debug(f"Adjusted plate bounding box: {(x1_adj, y1_adj, x2_adj, y2_adj)}; Cropped image shape: {plate_img.shape}")
                         
@@ -613,9 +916,11 @@ class ANPRProcessor:
                             logger.info(f"Plate rejected: empty text or low confidence {plate_conf}")
                             continue
                         
+                        merged_plate = plate_text
+                        
                         # Plate merging and tracking
-                        merged_plate = self._merge_similar_plates(plate_text)
-                        current_detections.add(merged_plate)
+                        # merged_plate = self._merge_similar_plates(plate_text)
+                        # current_detections.add(merged_plate)
                         
                         # Find closest vehicle to this plate
                         closest_vehicle = None
@@ -639,7 +944,7 @@ class ANPRProcessor:
                         vehicle_type = "unknown"
                         vehicle_color = "unknown"
                         
-                        if closest_vehicle and min_distance < 300:  # Threshold for matching
+                        if closest_vehicle and min_distance < 500:  # Threshold for matching
                             vehicle_type = closest_vehicle['type']
                             vx1, vy1, vx2, vy2 = closest_vehicle['box']
                             vehicle_roi = frame[vy1:vy2, vx1:vx2]
