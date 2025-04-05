@@ -1,0 +1,256 @@
+import os
+import sys
+from pathlib import Path
+import psycopg2
+from psycopg2.pool import SimpleConnectionPool
+from flask import Flask, render_template, jsonify, g
+from dotenv import load_dotenv
+import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(str(Path(__file__).parent.parent.resolve()))
+
+from config.appconfig import (
+    DB_HOST, 
+    DB_NAME, 
+    DB_USER, 
+    DB_PASSWORD, 
+    DB_PORT
+)
+
+# --- Path Setup ---
+# Get the directory containing this script (src/)
+SCRIPT_DIR = Path(__file__).parent.resolve()
+# Project root is one level up from src/
+PROJECT_ROOT = SCRIPT_DIR.parent 
+
+# --- Logging Setup ---
+LOGS_DIR = PROJECT_ROOT / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True) # Ensure logs directory exists
+LOG_FILE_PATH = LOGS_DIR / "web.log"
+
+# Get a specific logger instance for the web app
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("ANPR_WebApp") # Specific name for this logger
+logger.setLevel(logging.INFO) 
+
+# Remove existing handlers if any (important for repeated runs/debugging)
+if logger.hasHandlers():
+    logger.handlers.clear()
+
+# Console Handler (optional, but good for seeing logs during development)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(log_formatter)
+logger.addHandler(stream_handler)
+
+# File Handler (rotating log file)
+# Rotate log file when it reaches 1MB, keep 3 backup files
+file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=1024*1024, backupCount=3)
+file_handler.setFormatter(log_formatter)
+logger.addHandler(file_handler)
+
+logger.info("--- ANPR Web App Starting --- ")
+logger.info(f"Logging configured. Log file: {LOG_FILE_PATH}")
+
+logger.info(f"DB Config: Host={DB_HOST}, DB={DB_NAME}, User={DB_USER}, Port={DB_PORT}")
+
+# --- Database Connection Pool ---
+# Using a pool is more efficient than opening/closing connections for each request
+try:
+    db_pool = SimpleConnectionPool(
+        minconn=1,
+        maxconn=5, # Adjust max connections as needed
+        host=DB_HOST,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        port=DB_PORT,
+        connect_timeout=5
+    )
+    logger.info("Database connection pool created successfully.")
+except Exception as e:
+    logger.error(f"Error creating database connection pool: {e}", exc_info=True)
+    db_pool = None # Set pool to None if connection fails
+
+# --- Flask App Setup ---
+# Since web_app.py is in src/, templates and static are expected
+# to be in src/templates/ and src/static/ relative to the script's location.
+TEMPLATE_DIR = SCRIPT_DIR / 'templates'
+STATIC_DIR = SCRIPT_DIR / 'static'
+
+logger.info(f"Template folder: {TEMPLATE_DIR}")
+logger.info(f"Static folder: {STATIC_DIR}")
+
+# Check if template/static folders exist (helps debugging)
+if not TEMPLATE_DIR.is_dir():
+    logger.warning(f"Template directory NOT found: {TEMPLATE_DIR}")
+if not STATIC_DIR.is_dir():
+    logger.warning(f"Static directory NOT found: {STATIC_DIR}")
+
+# We can explicitly set the folders, or rely on Flask's default behavior 
+# when the app script is in src/ and templates/static are also in src/
+# Explicit is clearer:
+app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
+
+# Helper function to get a connection from the pool
+def get_db():
+    # Use the specific logger
+    if 'db' not in g and db_pool:
+        try:
+            g.db = db_pool.getconn()
+            # logger.debug("Acquired DB connection from pool.") # Can be noisy
+        except Exception as e:
+            logger.error(f"Failed to get DB connection from pool: {e}", exc_info=True)
+            g.db = None
+    return g.get('db', None)
+
+# Helper function to close the connection when the request context ends
+@app.teardown_appcontext
+def close_db(error):
+    # Use the specific logger
+    db = g.pop('db', None)
+    if db is not None and db_pool:
+        db_pool.putconn(db)
+        # logger.debug("Returned DB connection to pool.") # Can be noisy
+    if error:
+        # Log the error passed from Flask during teardown
+        logger.error(f"App context teardown error: {error}", exc_info=True)
+
+# --- Routes ---
+
+@app.route('/')
+def index():
+    """Renders the main page with the latest detections and stats."""
+    logger.info("Request received for index page ('/')")
+    conn = get_db()
+    detections = []
+    stats = {
+        'total_detections': 0,
+        'today_detections': 0
+    }
+    error_message = None
+
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # Fetch recent detections
+                logger.debug("Executing DB query for recent detections.")
+                cur.execute("""
+                    SELECT license_plate, start_time, end_time, confidence, 
+                           detection_count, vehicle_type, vehicle_color, 
+                           time_of_day, day_of_week
+                    FROM detected_plates
+                    ORDER BY end_time DESC
+                    LIMIT 50 
+                """)
+                colnames = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
+                detections = [dict(zip(colnames, row)) for row in rows]
+                logger.info(f"Fetched {len(detections)} recent detections.")
+
+                # Fetch total detections count
+                logger.debug("Executing DB query for total detection count.")
+                cur.execute("SELECT COUNT(*) FROM detected_plates")
+                total_count_result = cur.fetchone()
+                if total_count_result:
+                    stats['total_detections'] = total_count_result[0]
+                    logger.info(f"Total detections count: {stats['total_detections']}")
+
+                # Fetch detections count for today
+                logger.debug("Executing DB query for today's detection count.")
+                # Assuming end_time is a TIMESTAMP or TIMESTAMPTZ column
+                cur.execute("SELECT COUNT(*) FROM detected_plates WHERE DATE(end_time) = CURRENT_DATE")
+                today_count_result = cur.fetchone()
+                if today_count_result:
+                    stats['today_detections'] = today_count_result[0]
+                    logger.info(f"Today's detections count: {stats['today_detections']}")
+
+        except psycopg2.Error as e:
+            logger.error(f"Database query error on index page: {e}", exc_info=True)
+            error_message = f"Database Error: Could not retrieve data."
+            # Reset stats if DB error occurs after fetching some data
+            stats = {'total_detections': 'Error', 'today_detections': 'Error'}
+
+    else:
+        error_message = "Database connection not available."
+        logger.error("Database connection pool not available for index request.")
+        stats = {'total_detections': 'N/A', 'today_detections': 'N/A'}
+
+    # Check if template file exists before rendering (more debugging help)
+    template_path = TEMPLATE_DIR / 'index.html'
+    if not template_path.is_file():
+        logger.error(f"Template file not found at expected path: {template_path}")
+        return f"Error: Template 'index.html' not found at {template_path}", 500
+    
+    logger.debug("Rendering index.html template with detections and stats.")
+    try:
+        return render_template('index.html', 
+                               detections=detections, 
+                               stats=stats, 
+                               error=error_message)
+    except Exception as render_error:
+        logger.error(f"Error rendering template 'index.html': {render_error}", exc_info=True)
+        return f"Error rendering template: {render_error}", 500
+
+
+@app.route('/api/detections')
+def api_detections():
+    """Provides detection data as JSON for dynamic updates."""
+    # Use the specific logger
+    logger.info("Request received for API endpoint ('/api/detections')")
+    conn = get_db()
+    detections = []
+    error_message = None
+    status_code = 200
+
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                logger.debug("Executing DB query for API.")
+                cur.execute("""
+                    SELECT license_plate, start_time, end_time, confidence, 
+                           detection_count, vehicle_type, vehicle_color, 
+                           time_of_day, day_of_week
+                    FROM detected_plates
+                    ORDER BY end_time DESC
+                    LIMIT 50
+                """)
+                colnames = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
+                detections = []
+                for row_tuple in rows:
+                    row_dict = {}
+                    for i, col_name in enumerate(colnames):
+                        value = row_tuple[i]
+                        if isinstance(value, datetime):
+                            row_dict[col_name] = value.isoformat()
+                        else:
+                            row_dict[col_name] = value
+                    detections.append(row_dict)
+                logger.info(f"Fetched {len(detections)} detections for API.")
+
+        except psycopg2.Error as e:
+            logger.error(f"Database query error in API: {e}", exc_info=True)
+            error_message = f"Database Error: {e}"
+            status_code = 500 # Internal Server Error
+    else:
+        error_message = "Database connection not available."
+        status_code = 503 # Service Unavailable
+        logger.error("Database connection pool not available for API request.")
+
+    if error_message:
+        logger.warning(f"API request failed: {error_message}")
+        return jsonify({"error": error_message, "detections": []}), status_code
+    else:
+        logger.debug("Returning successful API response.")
+        return jsonify({"detections": detections})
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    # Use 0.0.0.0 to make it accessible on your network
+    # Use debug=True only for development (auto-reloads, provides debugger)
+    # For 'production' on the Pi, set debug=False and use a production WSGI server like gunicorn or waitress
+    logger.info("Starting Flask development server.")
+    app.run(host='0.0.0.0', port=5000, debug=True) # Set debug=False for production 

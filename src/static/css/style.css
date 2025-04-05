@@ -1,0 +1,94 @@
+/* Basic Styling for ANPR Web Interface */
+
+body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    /* Add padding top to prevent content from hiding behind fixed navbar */
+    padding-top: 70px; /* Adjust based on actual navbar height */
+}
+
+main {
+    flex: 1; /* Allows main content to grow and push footer down */
+}
+
+.footer {
+    flex-shrink: 0; /* Prevent footer from shrinking */
+    margin-top: auto; /* Push footer to the bottom */
+    padding: 0.75rem 0;
+    font-size: 0.9em;
+}
+
+.navbar {
+    /* Optional: Add a subtle shadow to the fixed navbar */
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, .075);
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+/* Dashboard Cards */
+.card {
+    margin-bottom: 1.5rem;
+}
+
+.card-header {
+    font-weight: bold;
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+.display-4 {
+    font-size: 3rem; /* Slightly smaller display size */
+    font-weight: 300;
+}
+
+.display-4 .bi {
+    font-size: 2.5rem; /* Adjust icon size within display */
+    margin-right: 0.5rem;
+    vertical-align: middle;
+}
+
+/* Table Styling */
+.table code {
+    font-weight: bold;
+    color: #d63384; /* Bootstrap pink for emphasis */
+    background-color: rgba(214, 51, 132, 0.05); /* Subtle background for code */
+    padding: 0.2em 0.4em;
+    border-radius: 0.25rem;
+}
+
+.badge {
+    font-size: 0.9em;
+    padding: 0.4em 0.6em;
+    border: 1px solid rgba(0,0,0,0.1); /* Subtle border for light badges */
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0, 0, 0, 0.04); /* Subtle hover effect */
+}
+
+.table thead th {
+    vertical-align: middle;
+    white-space: nowrap; /* Prevent headers from wrapping */
+}
+
+.table tbody td {
+    vertical-align: middle;
+}
+
+.table .progress {
+    margin-bottom: 0; /* Remove default margin below progress bars in table */
+}
+
+/* Center align specific columns if desired */
+.table td:nth-child(4) { /* Views column */
+    text-align: center;
+}
+
+/* Adjust column widths if necessary (example) */
+/* 
+.table th:nth-child(1), .table td:nth-child(1) { width: 15%; } /* License Plate */
+/* .table th:nth-child(2), .table td:nth-child(2) { width: 20%; } /* Last Seen */
+/* ... etc ... */
+ 

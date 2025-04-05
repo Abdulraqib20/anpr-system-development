@@ -30,7 +30,7 @@ def fetch_latest_records(conn):
     with conn.cursor() as cursor:
         cursor.execute("""
             SELECT id, start_time, end_time, license_plate, confidence, vehicle_type, vehicle_color, time_of_day, day_of_week
-            FROM license_plates2
+            FROM detected_plates
             ORDER BY id ASC
         """)
         return cursor.fetchall()

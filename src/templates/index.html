@@ -1,67 +1,154 @@
 {% extends 'base.html' %}
 
-{% block title %}ANPR Detections{% endblock %}
+{% block title %}ANPR Dashboard{% endblock %}
 
 {% block content %}
-<h1 class="mb-4">Recent License Plate Detections</h1>
 
-{% if error %}
-    <div class="alert alert-danger" role="alert">
-        {{ error }}
+<!-- Dashboard Stats -->
+<div class="row mb-4">
+    <div class="col-md-6 mb-3 mb-md-0">
+        <div class="card text-center h-100">
+            <div class="card-header">Total Detections</div>
+            <div class="card-body">
+                <h5 class="card-title display-4"><i class="bi bi-database-check"></i> {{ stats.total_detections if stats.total_detections is not none else 'N/A' }}</h5>
+            </div>
+        </div>
     </div>
-{% elif detections %}
-    <div class="table-responsive">
-        <table class="table table-striped table-hover align-middle">
-            <thead class="table-dark">
-                <tr>
-                    <th>License Plate</th>
-                    <th>Last Seen</th>
-                    <th>Confidence</th>
-                    <th>Detections</th>
-                    <th>Vehicle Type</th>
-                    <th>Vehicle Color</th>
-                    <th>Time of Day</th>
-                    <th>Day of Week</th>
-                    <th>First Seen</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for det in detections %}
-                <tr>
-                    <td><code>{{ det.license_plate }}</code></td>
-                    <td>{{ det.end_time.strftime('%Y-%m-%d %H:%M:%S') if det.end_time else 'N/A' }}</td>
-                    <td>{{ '%.2f'|format(det.confidence) if det.confidence is not none else 'N/A' }}</td>
-                    <td>{{ det.detection_count if det.detection_count is not none else 'N/A' }}</td>
-                    <td>{{ det.vehicle_type | title if det.vehicle_type else 'Unknown' }}</td>
-                    <td>
-                        {% if det.vehicle_color and det.vehicle_color != 'unknown' %}
-                            <span class="badge" style="background-color: {{ det.vehicle_color.lower() }}; color: {{ 'black' if det.vehicle_color.lower() in ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'] else 'white' }};">{{ det.vehicle_color | title }}</span>
-                        {% else %}
-                            Unknown
-                        {% endif %}
-                    </td>
-                    <td>{{ det.time_of_day | title if det.time_of_day else 'N/A' }}</td>
-                    <td>{{ det.day_of_week if det.day_of_week else 'N/A' }}</td>
-                    <td>{{ det.start_time.strftime('%Y-%m-%d %H:%M:%S') if det.start_time else 'N/A' }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="col-md-6">
+        <div class="card text-center h-100">
+            <div class="card-header">Detections Today</div>
+            <div class="card-body">
+                <h5 class="card-title display-4"><i class="bi bi-calendar-check"></i> {{ stats.today_detections if stats.today_detections is not none else 'N/A' }}</h5>
+            </div>
+        </div>
     </div>
-{% else %}
-    <div class="alert alert-info" role="alert">
-        No detections found in the database yet.
+</div>
+
+<!-- Detection Table Section -->
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-table"></i> Recent Detections</h5>
+        <!-- Placeholder for Search/Filter -->
+        <!-- <div class="col-md-4">
+            <input type="text" class="form-control form-control-sm" placeholder="Filter plates...">
+        </div> -->
     </div>
-{% endif %}
+    <div class="card-body">
+        {% if error %}
+            <div class="alert alert-danger" role="alert">
+                <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
+            </div>
+        {% elif detections %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover align-middle small">
+                    <thead class="table-dark">
+                        <tr>
+                            <th><i class="bi bi-person-badge"></i> Plate</th>
+                            <th><i class="bi bi-clock-history"></i> Last Seen</th>
+                            <th><i class="bi bi-check-circle"></i> Confidence</th>
+                            <th><i class="bi bi-eye"></i> Views</th>
+                            <th><i class="bi bi-truck-front"></i> Vehicle</th>
+                            <th><i class="bi bi-palette"></i> Color</th>
+                            <th><i class="bi bi-clock"></i> Time</th>
+                            <th><i class="bi bi-calendar-week"></i> Day</th>
+                            <th><i class="bi bi-clock-history"></i> First Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detections-table-body"> {# Add ID for potential JS updates #}
+                        {% for det in detections %}
+                        <tr>
+                            <td><code>{{ det.license_plate }}</code></td>
+                            <td>{{ det.end_time.strftime('%Y-%m-%d %H:%M') if det.end_time else 'N/A' }}</td>
+                            <td>
+                                {% set conf_val = det.confidence * 100 if det.confidence is not none else 0 %}
+                                {% set conf_bg = 'bg-success' if conf_val >= 75 else ('bg-warning' if conf_val >= 50 else 'bg-danger') %}
+                                <div class="progress" role="progressbar" aria-label="Confidence" aria-valuenow="{{ conf_val }}" aria-valuemin="0" aria-valuemax="100" style="height: 18px; font-size: 0.8em;">
+                                  <div class="progress-bar {{ conf_bg }} text-dark fw-bold" style="width: {{ conf_val }}%">{{ '%.1f'|format(conf_val) }}%</div>
+                                </div>
+                            </td>
+                            <td class="text-center">{{ det.detection_count if det.detection_count is not none else '-' }}</td>
+                            <td>{{ det.vehicle_type | title if det.vehicle_type else '-' }}</td>
+                            <td>
+                                {% if det.vehicle_color and det.vehicle_color != 'unknown' %}
+                                    {% set color = det.vehicle_color | lower %}
+                                    {# Simple heuristic for text color based on background #}
+                                    {% set text_color = 'text-dark' if color in ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'] else 'text-white' %}
+                                    <span class="badge {{ text_color }}" style="background-color: {{ color }};">{{ det.vehicle_color | title }}</span>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>{{ det.time_of_day | title if det.time_of_day else '-' }}</td>
+                            <td>{{ det.day_of_week if det.day_of_week else '-' }}</td>
+                            <td>{{ det.start_time.strftime('%Y-%m-%d %H:%M') if det.start_time else 'N/A' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-info" role="alert">
+                <i class="bi bi-info-circle-fill"></i> No detections found in the database yet.
+            </div>
+        {% endif %}
+    </div> {# End Card Body #}
+</div> {# End Card #}
 
 {% endblock %}
 
 {% block scripts_extra %}
 <script>
-    // Optional: Add auto-refresh functionality here later using the /api/detections endpoint
-    // Example (very basic):
-    // setTimeout(() => {
-    //     window.location.reload();
-    // }, 30000); // Reload every 30 seconds
+    // Optional: Auto-refresh functionality using the /api/detections endpoint
+    /*
+    function fetchAndUpdateDetections() {
+        fetch('{{ url_for("api_detections") }}')
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    console.error("API Error:", data.error);
+                    // Optionally display error to user
+                    return;
+                }
+                const tableBody = document.getElementById('detections-table-body');
+                tableBody.innerHTML = ''; // Clear existing rows
+                data.detections.forEach(det => {
+                    // Rebuild table rows based on the new data (similar structure to the Jinja loop)
+                    // This part requires careful reconstruction of the HTML row structure in JavaScript
+                    const confidence = det.confidence ? (det.confidence * 100).toFixed(1) : 0;
+                    const confVal = parseFloat(confidence);
+                    const confBg = confVal >= 75 ? 'bg-success' : (confVal >= 50 ? 'bg-warning' : 'bg-danger');
+                    const vehicleColor = det.vehicle_color && det.vehicle_color !== 'unknown' ? det.vehicle_color.toLowerCase() : null;
+                    const textColor = vehicleColor && ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'].includes(vehicleColor) ? 'text-dark' : 'text-white';
+                    const colorBadge = vehicleColor ? 
+                        `<span class="badge ${textColor}" style="background-color: ${vehicleColor};">${det.vehicle_color.replace(/^\w/, c => c.toUpperCase())}</span>` : '-';
+
+                    const row = `
+                        <tr>
+                            <td><code>${det.license_plate}</code></td>
+                            <td>${det.end_time ? new Date(det.end_time).toLocaleString('sv-SE').slice(0, 16) : 'N/A'}</td>
+                            <td>
+                                <div class="progress" role="progressbar" aria-valuenow="${confVal}" aria-valuemin="0" aria-valuemax="100" style="height: 18px; font-size: 0.8em;">
+                                    <div class="progress-bar ${confBg} text-dark fw-bold" style="width: ${confVal}%">${confidence}%</div>
+                                </div>
+                            </td>
+                             <td class="text-center">${det.detection_count !== null ? det.detection_count : '-'}</td>
+                            <td>${det.vehicle_type ? det.vehicle_type.replace(/^\w/, c => c.toUpperCase()) : '-'}</td>
+                            <td>${colorBadge}</td>
+                            <td>${det.time_of_day ? det.time_of_day.replace(/^\w/, c => c.toUpperCase()) : '-'}</td>
+                            <td>${det.day_of_week ? det.day_of_week : '-'}</td>
+                            <td>${det.start_time ? new Date(det.start_time).toLocaleString('sv-SE').slice(0, 16) : 'N/A'}</td>
+                        </tr>
+                    `;
+                    tableBody.innerHTML += row;
+                });
+            })
+            .catch(error => console.error('Error fetching detections:', error));
+    }
+
+    // Refresh every 30 seconds
+    // setInterval(fetchAndUpdateDetections, 30000);
+    // Initial fetch on load (optional if server rendering is sufficient)
+    // fetchAndUpdateDetections(); 
+    */
 </script>
 {% endblock %} 

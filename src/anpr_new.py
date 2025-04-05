@@ -38,21 +38,36 @@ from config.appconfig import (
     DB_PORT
 )
 
+logs_dir = Path(__file__).parent.parent / "logs"
+logs_dir.mkdir(parents=True, exist_ok=True)
+log_file_path = logs_dir / "config.log"
+
+# Set up logging
 logger = logging.getLogger("ANPR")
 logger.setLevel(logging.DEBUG)
 if logger.hasHandlers():
     logger.handlers.clear()
+
+# Console handler
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
 
+# File handler
+file_handler = logging.FileHandler(log_file_path)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+logger.info(f"Logging to console and file: {log_file_path}")
+
 #--------------------------------------------------------------------------------------
 #  Configuration Variables
 #--------------------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).parent.parent  # src -> project root
+PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -61,10 +76,10 @@ VEHICLE_MODEL_PATH = "models/yolov8n.pt"
 VEHICLE_COLOR_MODEL_PATH = "models/EFN-model.best.h5"
 MODEL_PATH="models/license_plate_detector.pt"
 
-PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,8}$')  # Strict 7-8 character format
-# PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
+# PLATE_REGEX = re.compile(r'^[A-Z0-9]{7,8}$')  # Strict 7-8 character format
+PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 TRACKING_FRAMES=30
-MIN_CONFIDENCE=0.40
+MIN_CONFIDENCE=0.45
 MIN_DETECTIONS=1
 
 db_params = {
@@ -102,7 +117,6 @@ VEHICLE_CLASSES = {
     8: 'boat',
 }
 
-# Color class configuration (Add this near VEHICLE_CLASSES)
 COLOR_CLASSES = [
     'beige', 'black', 'blue', 'brown', 'gold', 'green', 'grey',
     'orange', 'pink', 'purple', 'red', 'silver', 'tan', 'white', 'yellow'
@@ -191,14 +205,19 @@ class ANPRProcessor:
         self.model = YOLO(MODEL_PATH)
         # self.ocr = PaddleOCR(use_angle_cls=True, use_gpu=False, lang='en', det=False, rec_only=True)
         self.ocr = PaddleOCR(use_angle_cls=True, use_gpu=False)
+        # Updated plate_tracker: Key is the *initial* OCR read (best guess)
+        # Value contains list of all (text, confidence) readings for similar plates
         self.plate_tracker = defaultdict(lambda: {
-            'count': 0, 
-            'confidence': 0, 
-            'last_seen': 0,
-            'vehicle_type': None,
-            'vehicle_color': None,
-            'time_details': {},
+            'readings': [],          # List of (text, confidence) tuples
+            'first_seen': None,       # Timestamp of first sighting
+            'last_seen': None,        # Timestamp of most recent sighting
+            'vehicle_type': "unknown", # Associated vehicle type
+            'vehicle_color': "unknown", # Associated vehicle color
+            'time_details': None,     # Timestamp details from last sighting
+            'detection_count': 0      # How many frames this potential plate was seen in
         })
+        # Track globally saved plates for the entire processing session
+        self.saved_plates = set()  # Plates already saved to DB in this run
         self.color_model = tf.keras.models.load_model(
             VEHICLE_COLOR_MODEL_PATH,
             custom_objects={'DepthwiseConv2D': FixedDepthwiseConv2D}
@@ -213,7 +232,7 @@ class ANPRProcessor:
             user=DB_USER,
             password=DB_PASSWORD,
             port=DB_PORT,
-            connect_timeout=5  # Add connection timeout
+            connect_timeout=5 
         )
         # Processing queue for multithreading
         self.queue = Queue(maxsize=10)
@@ -360,27 +379,281 @@ class ANPRProcessor:
             return "", 0.0
 
     #---------------------------------------------------------------------------------------------
-    # Save to Database
-    #---------------------------------------------------------------------------------------------    
-    def save_to_database(self, plates_to_save=None):
-        """Save to database with session-based duplicate prevention"""
-        plates_to_save = plates_to_save or self.plate_tracker
+    # Helper: Levenshtein Distance
+    #---------------------------------------------------------------------------------------------
+    def _calculate_levenshtein_distance(self, s1, s2):
+        """Calculates the Levenshtein distance between two strings."""
+        if len(s1) < len(s2):
+            return self._calculate_levenshtein_distance(s2, s1)
+
+        if len(s2) == 0:
+            return len(s1)
+
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
         
-        # Strict plate validation filters
-        filtered_plates = {
-            plate: data for plate, data in plates_to_save.items()
-            if (
-                len(plate) in (7, 8) and  # Strict length check
-                data.get('vehicle_color', '').lower() != 'unknown' and
-                data['count'] >= MIN_DETECTIONS and
-                data['max_confidence'] >= 0.50 and
-                re.match(r'^[A-Z0-9]{7,8}$', plate)
-            )
-        }
+        return previous_row[-1]
+
+    #---------------------------------------------------------------------------------------------
+    # Helper: Character Level Voting
+    #---------------------------------------------------------------------------------------------
+    def _perform_char_level_voting(self, readings):
+        """Performs confidence-weighted character-level voting.
+
+        Args:
+            readings: List of (text, confidence) tuples, all expected to be 8 chars.
+
+        Returns:
+            Tuple: (voted_plate_string, average_confidence) or (None, 0) if invalid.
+        """
+        if not readings:
+            return None, 0.0
+
+        plate_len = 8  # Enforce 8 characters
+        char_votes = [defaultdict(float) for _ in range(plate_len)]
+        total_confidence_sum = 0
+        valid_readings_count = 0
+
+        for text, confidence in readings:
+            if len(text) == plate_len:
+                total_confidence_sum += confidence
+                valid_readings_count += 1
+                for i, char in enumerate(text):
+                    char_votes[i][char] += confidence  # Weight vote by confidence
+
+        if valid_readings_count == 0:
+            return None, 0.0
+
+        voted_plate = ""
+        for i in range(plate_len):
+            if not char_votes[i]:
+                # If somehow a position has no votes, we can't form a valid plate
+                return None, 0.0 
+            # Choose the character with the highest total confidence score for this position
+            best_char = max(char_votes[i], key=char_votes[i].get)
+            voted_plate += best_char
+
+        average_confidence = total_confidence_sum / valid_readings_count
+        return voted_plate, average_confidence
+
+    #---------------------------------------------------------------------------------------------
+    # Consolidate Plates
+    #---------------------------------------------------------------------------------------------
+    def consolidate_plates(self, distance_threshold=3):  # Increase threshold from 2 to 3
+        """Consolidates tracked plates based on Levenshtein distance and voting.
+
+        Groups plate tracker entries whose keys are similar, performs voting
+        on all readings within each group, and returns a consolidated dictionary.
+
+        Args:
+            distance_threshold: Max Levenshtein distance to group plates.
+
+        Returns:
+            Dictionary of consolidated plates: 
+            { final_plate_text: { 'first_seen', 'last_seen', 'avg_confidence', 
+                                'detection_count', 'vehicle_type', 'vehicle_color', 'time_details' } }
+        """
+        logger.info(f"Starting plate consolidation. Initial tracker size: {len(self.plate_tracker)}")
+        if not self.plate_tracker:
+            return {}
+
+        # Group plates by similarity
+        plates = list(self.plate_tracker.keys())
+        grouped_indices = defaultdict(list)
+        visited = [False] * len(plates)
+        
+        # First pass: Group plates with more aggressive similarity matching
+        for i in range(len(plates)):
+            if visited[i]:
+                continue
+            visited[i] = True
+            current_group_key = plates[i] # Use the first plate in group as representative
+            grouped_indices[current_group_key].append(i)
+            
+            for j in range(i + 1, len(plates)):
+                if not visited[j]:
+                    # Only compare if keys are roughly similar length (optimization)
+                    if abs(len(plates[i]) - len(plates[j])) <= distance_threshold:
+                        distance = self._calculate_levenshtein_distance(plates[i], plates[j])
+                        if distance <= distance_threshold:
+                            visited[j] = True
+                            grouped_indices[current_group_key].append(j)
+        
+        # Log the initial grouping
+        for group_key, indices in grouped_indices.items():
+            group_plates = [plates[idx] for idx in indices]
+            logger.debug(f"Initial grouping: {group_key} -> {group_plates}")
+                            
+        consolidated_plates = {}
+        processed_keys = set()
+        
+        for group_key, indices in grouped_indices.items():
+            if group_key in processed_keys:
+                continue
+
+            all_readings_in_group = []
+            first_seen = float('inf')
+            last_seen = 0
+            total_detections = 0
+            # Prioritize vehicle info from entries with more readings or higher confidence? For now, take latest.
+            latest_vehicle_type = "unknown"
+            latest_vehicle_color = "unknown"
+            latest_time_details = None
+            latest_seen_time_for_group = 0
+
+            group_keys = []
+            for index in indices:
+                plate_key = plates[index]
+                group_keys.append(plate_key)
+                data = self.plate_tracker[plate_key]
+                all_readings_in_group.extend(data['readings'])
+                
+                if data['first_seen'] is not None:
+                    first_seen = min(first_seen, data['first_seen'])
+                if data['last_seen'] is not None:
+                     last_seen = max(last_seen, data['last_seen'])
+                     # Track which data corresponds to the absolute last seen time
+                     if data['last_seen'] > latest_seen_time_for_group:
+                        latest_seen_time_for_group = data['last_seen']
+                        latest_vehicle_type = data['vehicle_type']
+                        latest_vehicle_color = data['vehicle_color']
+                        latest_time_details = data['time_details']
+
+                total_detections += data['detection_count']
+                processed_keys.add(plate_key) # Mark original keys as processed
+                
+            # Perform voting on all readings for this group
+            voted_plate, avg_confidence = self._perform_char_level_voting(all_readings_in_group)
+            
+            if voted_plate and PLATE_REGEX.fullmatch(voted_plate): # Ensure voted plate is valid 8-char
+                logger.debug(f"Consolidated group {group_keys} into '{voted_plate}' (conf: {avg_confidence:.2f}, detections: {total_detections})")
+                
+                # Second deduplication: Check if this voted plate is similar to any already consolidated plate
+                duplicate_found = False
+                for existing_plate in consolidated_plates.keys():
+                    if self._calculate_levenshtein_distance(voted_plate, existing_plate) <= distance_threshold:
+                        logger.debug(f"Merged duplicate plate after voting: '{voted_plate}' similar to existing '{existing_plate}'")
+                        # Merge with existing consolidated plate (keep the one with higher confidence)
+                        if avg_confidence > consolidated_plates[existing_plate]['avg_confidence']:
+                            # Update the detection count but keep the existing plate text
+                            consolidated_plates[existing_plate]['detection_count'] += total_detections
+                            # Update other metadata if confidence is higher
+                            consolidated_plates[existing_plate]['avg_confidence'] = avg_confidence
+                            consolidated_plates[existing_plate]['vehicle_type'] = latest_vehicle_type
+                            consolidated_plates[existing_plate]['vehicle_color'] = latest_vehicle_color
+                        else:
+                            # Just update the detection count
+                            consolidated_plates[existing_plate]['detection_count'] += total_detections
+                        duplicate_found = True
+                        break
+                
+                # If no duplicate found, add as new entry
+                if not duplicate_found:
+                    consolidated_plates[voted_plate] = {
+                        'first_seen': first_seen if first_seen != float('inf') else last_seen, # Handle case where only one sighting
+                        'last_seen': last_seen,
+                        'avg_confidence': avg_confidence,
+                        'detection_count': total_detections,
+                        'vehicle_type': latest_vehicle_type, 
+                        'vehicle_color': latest_vehicle_color,
+                        'time_details': latest_time_details
+                    }
+            else:
+                 logger.debug(f"Discarding group {group_keys} after voting. Voted plate: '{voted_plate}'")
+
+        # Clear the old tracker after consolidation
+        self.plate_tracker.clear()
+        logger.info(f"Consolidation finished. Final plates: {len(consolidated_plates)}")
+        return consolidated_plates
+        
+    #---------------------------------------------------------------------------------------------
+    # Save to Database
+    #---------------------------------------------------------------------------------------------
+    def save_to_database(self):
+        """Consolidates plates and saves valid ones to the database."""
+        consolidated_plates = self.consolidate_plates()
+
+        if not consolidated_plates:
+            logger.info("No plates to save after consolidation.")
+            return
+            
+        logger.info(f"After consolidation, found {len(consolidated_plates)} potential plates:")
+        for plate, data in consolidated_plates.items():
+            logger.info(f"  Plate: {plate}, Confidence: {data['avg_confidence']:.2f}, " 
+                      f"Detections: {data['detection_count']}, " 
+                      f"Vehicle: {data['vehicle_type']}, Color: {data['vehicle_color']}")
+        
+        # Track filtered plates for debugging
+        color_filtered = [] # Restore color filtering
+        confidence_filtered = []
+        detection_filtered = []
+        
+        filtered_plates = {}
+        for plate, data in consolidated_plates.items():
+            # Check each filter condition separately for better logging
+            # Restore vehicle color check
+            if data.get('vehicle_color', '').lower() == 'unknown':
+                color_filtered.append(plate)
+                continue
+                
+            if data['detection_count'] < MIN_DETECTIONS:
+                detection_filtered.append(plate)
+                continue
+                
+            # Use global MIN_CONFIDENCE
+            if data['avg_confidence'] < MIN_CONFIDENCE:
+                confidence_filtered.append(plate)
+                continue
+                
+            # If we get here, all filters passed
+            filtered_plates[plate] = data
+            
+        # Log detailed filtering results
+        # Restore color filtering log
+        if color_filtered:
+            logger.warning(f"Filtered out {len(color_filtered)} plates due to unknown vehicle color: {color_filtered}")
+        if confidence_filtered:
+            logger.warning(f"Filtered out {len(confidence_filtered)} plates due to low confidence (<{MIN_CONFIDENCE}): {confidence_filtered}")
+        if detection_filtered:
+            logger.warning(f"Filtered out {len(detection_filtered)} plates due to low detection count (<{MIN_DETECTIONS}): {detection_filtered}")
         
         if not filtered_plates:
-            logger.info("All plates filtered out due to validation")
+            # Restore original warning message wording
+            logger.warning("All consolidated plates filtered out due to validation (color, count, confidence).")
             return
+            
+        # More aggressive similarity-based deduplication with the saved plates
+        new_plates = {}
+        similar_to_saved_plates = []
+        
+        for plate, data in filtered_plates.items():
+            # Check if this plate is similar to any already saved plate
+            similar_to_saved = False
+            for saved_plate in self.saved_plates:
+                if self._calculate_levenshtein_distance(plate, saved_plate) <= 3:  # Using same threshold as consolidation
+                    logger.info(f"Skipping plate '{plate}' - similar to already saved plate '{saved_plate}'")
+                    similar_to_saved = True
+                    similar_to_saved_plates.append(plate)
+                    break
+            
+            if not similar_to_saved:
+                new_plates[plate] = data
+        
+        if similar_to_saved_plates:
+            logger.info(f"Filtered out {len(similar_to_saved_plates)} plates similar to already saved plates: {similar_to_saved_plates}")
+            
+        if not new_plates:
+            logger.info("All plates have already been saved to the database in this session.")
+            return
+            
+        logger.info(f"After session-level deduplication: {len(new_plates)}/{len(filtered_plates)} plates are new")
 
         conn = None
         try:
@@ -394,38 +667,55 @@ class ANPRProcessor:
                         datetime.fromtimestamp(data['first_seen']).isoformat(),
                         datetime.fromtimestamp(data['last_seen']).isoformat(),
                         plate,
-                        data['max_confidence'],
-                        data['count'],
+                        # data['max_confidence'], # Old: Max confidence from tracker
+                        data['avg_confidence'], # New: Average confidence after voting
+                        # data['count'], # Old: Count from tracker
+                        data['detection_count'], # New: Total detections from consolidation
                         data['vehicle_type'],
-                        data['vehicle_color'],
+                        data['vehicle_color'], # Restore original vehicle color saving
                         data['time_details']['time_of_day'],
                         data['time_details']['day_of_week'],
                     )
-                    for plate, data in filtered_plates.items()
+                    for plate, data in new_plates.items()
                 ]
 
+                # Final deduplication step for this specific run
                 if records:
-                    # Standard insert - allows same plate across different sessions
+                    final_unique_records = []
+                    seen_plates_in_run = set()
+                    for record in records:
+                        plate_str = record[2] # License plate is the 3rd element (index 2)
+                        if plate_str not in seen_plates_in_run:
+                            final_unique_records.append(record)
+                            seen_plates_in_run.add(plate_str)
+                        else:
+                            logger.warning(f"Duplicate plate '{plate_str}' detected after consolidation for this run. Keeping only first instance.")
+
+                    if not final_unique_records:
+                        logger.info("No unique records left after final deduplication.")
+                        return # Exit if deduplication removed everything
+
+                    logger.info(f"Inserting {len(final_unique_records)} unique records into DB (filtered from {len(records)} consolidated records)." )
+                    # Use final_unique_records for insertion
                     cursor.executemany("""
                         INSERT INTO detected_plates
                         (start_time, end_time, license_plate, confidence, detection_count, 
                         vehicle_type, vehicle_color, time_of_day, day_of_week)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (start_time, end_time, license_plate)
-                        DO UPDATE SET
-                            confidence = GREATEST(detected_plates.confidence, EXCLUDED.confidence),
-                            detection_count = detected_plates.detection_count + EXCLUDED.detection_count,
-                            vehicle_type = COALESCE(EXCLUDED.vehicle_type, detected_plates.vehicle_type),
-                            vehicle_color = COALESCE(EXCLUDED.vehicle_color, detected_plates.vehicle_color)
-                    """, records)
+                        ON CONFLICT DO NOTHING
+                    """, final_unique_records)
 
                     conn.commit()
-                    logger.info(f"Successfully saved {cursor.rowcount} plates")
+                    logger.info(f"Successfully saved {cursor.rowcount} consolidated plates")
+                    
+                    # Add successfully saved plates to our session-wide tracking set
+                    for record in final_unique_records:
+                        self.saved_plates.add(record[2])  # Add the plate to saved set
 
-                # Clear saved plates from tracker
-                for plate in filtered_plates:
-                    if plate in self.plate_tracker:
-                        del self.plate_tracker[plate]
+                # Clearing tracker is now handled within consolidate_plates
+                # for plate in filtered_plates:
+                #     if plate in self.plate_tracker:
+                #         del self.plate_tracker[plate]
 
         except Exception as e:
             logger.error(f"Database error: {str(e)}")
@@ -483,26 +773,26 @@ class ANPRProcessor:
                             vehicle_roi = frame[vy1:vy2, vx1:vx2]
                             vehicle_color = self.predict_vehicle_color(vehicle_roi)
                         
-                        # Update tracker with new attributes using your approach
+                        # Update tracker with the *raw* OCR reading for potential consolidation later
                         now = time.time()
-                        tracker_entry = {
-                            'first_seen': self.plate_tracker.get(plate_text, {}).get('first_seen', now),
-                            'last_seen': now,
-                            'max_confidence': max(
-                                self.plate_tracker.get(plate_text, {}).get('max_confidence', 0),
-                                plate_conf
-                            ),
-                            'count': self.plate_tracker.get(plate_text, {}).get('count', 0) + 1,
-                            'vehicle_type': vehicle_type,
-                            'vehicle_color': vehicle_color,
-                            'time_details': time_details
-                        }
+                        # Use plate_text as the initial key
+                        key_plate_text = plate_text 
+
+                        # Append the current reading
+                        self.plate_tracker[key_plate_text]['readings'].append((plate_text, plate_conf))
                         
-                        self.plate_tracker[plate_text] = tracker_entry
+                        # Update timestamps and other metadata
+                        if self.plate_tracker[key_plate_text]['first_seen'] is None:
+                            self.plate_tracker[key_plate_text]['first_seen'] = now
+                        self.plate_tracker[key_plate_text]['last_seen'] = now
+                        self.plate_tracker[key_plate_text]['vehicle_type'] = vehicle_type
+                        self.plate_tracker[key_plate_text]['vehicle_color'] = vehicle_color
+                        self.plate_tracker[key_plate_text]['time_details'] = time_details
+                        self.plate_tracker[key_plate_text]['detection_count'] += 1
+
+                        logger.info(f"Added reading '{plate_text}' ({plate_conf:.2f}) to tracker key '{key_plate_text}'. Count: {self.plate_tracker[key_plate_text]['detection_count']}")
                         
-                        logger.info(f"Tracked plate {plate_text} with count {self.plate_tracker[plate_text]['count']}")
-                        
-                        # Draw bounding box and OCR annotation on the frame
+                        # Draw bounding box and OCR annotation on the frame (using the current frame's OCR result)
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.putText(frame, f"{plate_text} ({plate_conf:.2f})", 
                                     (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 
@@ -546,7 +836,7 @@ class ANPRProcessor:
             frames_since_last_processed = 0
             
             # Track plates we've already seen in THIS session
-            session_plates = set()
+            # session_plates = set() # REMOVED - Consolidation handles this
             
             for i, frame in enumerate(video.get_frames()):
                 if frame is None or not self.running:
@@ -588,24 +878,25 @@ class ANPRProcessor:
                 # Process the frame or skip it
                 if process_this_frame:
                     # Process frame and get the before/after state of the tracker
-                    before_plates = set(self.plate_tracker.keys())
+                    # before_plates = set(self.plate_tracker.keys()) # Less relevant now
                     processed_frame = self.process_frame(frame)
-                    after_plates = set(self.plate_tracker.keys())
+                    # after_plates = set(self.plate_tracker.keys())
                     
                     # Check for new plates that were detected in this frame
-                    new_plates = after_plates - before_plates
+                    # new_plates = after_plates - before_plates # Less relevant now
                     
                     # Remove any plates we've already seen in this session
                     # (This prevents duplicates within the same run)
-                    for plate in list(new_plates):
-                        if plate in session_plates:
-                            if plate in self.plate_tracker:
-                                logger.info(f"Removing duplicate plate from tracker: {plate}")
-                                del self.plate_tracker[plate]
-                        else:
-                            # Add to our session tracking
-                            if len(plate) in (7, 8) and re.match(r'^[A-Z0-9]{7,8}$', plate):
-                                session_plates.add(plate)
+                    # REMOVED - Consolidation handles this
+                    # for plate in list(new_plates):
+                    #     if plate in session_plates:
+                    #         if plate in self.plate_tracker:
+                    #             logger.info(f"Removing duplicate plate from tracker: {plate}")
+                    #             del self.plate_tracker[plate]
+                    #     else:
+                    #         # Add to our session tracking
+                    #         if len(plate) == 8 and PLATE_REGEX.fullmatch(plate):
+                    #             session_plates.add(plate)
                     
                     last_processed_frame = frame.copy()
                     processed_count += 1
@@ -617,22 +908,14 @@ class ANPRProcessor:
                 
                 # Write frame to output
                 video.write_frame(processed_frame)
-                
-                # Save to database every 15 seconds
-                elapsed = (datetime.now() - window_start).total_seconds()
-                if elapsed > 15:
-                    if self.plate_tracker:
-                        logger.info(f"Periodic saving to database. Current tracker size: {len(self.plate_tracker)}")
-                        self.save_to_database()
-                    window_start = datetime.now()
-            
-            # Final database save
-            if self.plate_tracker:
-                logger.info("Final database save.")
-                self.save_to_database()
-                    
+
+                # --- Final Database Save --- (Runs once after loop finishes)
+                if self.plate_tracker:
+                    logger.info("--- Final Database Save Triggered ---")
+                    self.save_to_database()
+
             logger.info(f"Video processing completed. Processed: {processed_count}, skipped: {skip_count}")
-            logger.info(f"Total unique plates detected in this session: {len(session_plates)}")
+            # logger.info(f"Total unique plates detected in this session: {len(session_plates)}") # Removed session plates
   
 #----------------------------------------------------------------------------------------------
 #                                   Main Function
@@ -655,3 +938,4 @@ def main():
 if __name__ == "__main__":
     main()
     
+
