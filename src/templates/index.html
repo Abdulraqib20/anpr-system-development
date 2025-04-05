@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+
+{% block title %}ANPR Detections{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">Recent License Plate Detections</h1>
+
+{% if error %}
+    <div class="alert alert-danger" role="alert">
+        {{ error }}
+    </div>
+{% elif detections %}
+    <div class="table-responsive">
+        <table class="table table-striped table-hover align-middle">
+            <thead class="table-dark">
+                <tr>
+                    <th>License Plate</th>
+                    <th>Last Seen</th>
+                    <th>Confidence</th>
+                    <th>Detections</th>
+                    <th>Vehicle Type</th>
+                    <th>Vehicle Color</th>
+                    <th>Time of Day</th>
+                    <th>Day of Week</th>
+                    <th>First Seen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for det in detections %}
+                <tr>
+                    <td><code>{{ det.license_plate }}</code></td>
+                    <td>{{ det.end_time.strftime('%Y-%m-%d %H:%M:%S') if det.end_time else 'N/A' }}</td>
+                    <td>{{ '%.2f'|format(det.confidence) if det.confidence is not none else 'N/A' }}</td>
+                    <td>{{ det.detection_count if det.detection_count is not none else 'N/A' }}</td>
+                    <td>{{ det.vehicle_type | title if det.vehicle_type else 'Unknown' }}</td>
+                    <td>
+                        {% if det.vehicle_color and det.vehicle_color != 'unknown' %}
+                            <span class="badge" style="background-color: {{ det.vehicle_color.lower() }}; color: {{ 'black' if det.vehicle_color.lower() in ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'] else 'white' }};">{{ det.vehicle_color | title }}</span>
+                        {% else %}
+                            Unknown
+                        {% endif %}
+                    </td>
+                    <td>{{ det.time_of_day | title if det.time_of_day else 'N/A' }}</td>
+                    <td>{{ det.day_of_week if det.day_of_week else 'N/A' }}</td>
+                    <td>{{ det.start_time.strftime('%Y-%m-%d %H:%M:%S') if det.start_time else 'N/A' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <div class="alert alert-info" role="alert">
+        No detections found in the database yet.
+    </div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+    // Optional: Add auto-refresh functionality here later using the /api/detections endpoint
+    // Example (very basic):
+    // setTimeout(() => {
+    //     window.location.reload();
+    // }, 30000); // Reload every 30 seconds
+</script>
+{% endblock %} 
