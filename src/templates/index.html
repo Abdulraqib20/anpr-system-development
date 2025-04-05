@@ -43,6 +43,7 @@
                 <table class="table table-striped table-hover align-middle small">
                     <thead class="table-dark">
                         <tr>
+                            <th><i class="bi bi-card-image"></i> Image</th>
                             <th><i class="bi bi-person-badge"></i> Plate</th>
                             <th><i class="bi bi-clock-history"></i> Last Seen</th>
                             <th><i class="bi bi-check-circle"></i> Confidence</th>
@@ -57,6 +58,17 @@
                     <tbody id="detections-table-body"> {# Add ID for potential JS updates #}
                         {% for det in detections %}
                         <tr>
+                            <td>
+                                {% if det.image_filename %}
+                                    <img src="{{ url_for('serve_plate_image', filename=det.image_filename) }}"
+                                         alt="Plate {{ det.license_plate }}"
+                                         class="img-thumbnail" 
+                                         style="max-height: 40px; width: auto;" 
+                                         loading="lazy">
+                                {% else %}
+                                    <i class="bi bi-image-alt text-muted" title="No image available"></i>
+                                {% endif %}
+                            </td>
                             <td><code>{{ det.license_plate }}</code></td>
                             <td>{{ det.end_time.strftime('%Y-%m-%d %H:%M') if det.end_time else 'N/A' }}</td>
                             <td>

@@ -68,8 +68,11 @@ logger.info(f"Logging to console and file: {log_file_path}")
 #--------------------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).parent.parent
-OUTPUT_DIR = PROJECT_ROOT / "output"
+OUTPUT_DIR = PROJECT_ROOT / "output_plates"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# Define directory for saving cropped plate images
+PLATE_IMAGE_DIR = OUTPUT_DIR / "plate_images"
+PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # VEHICLE_MODEL_PATH = "models/yolov8m-seg.pt"
 VEHICLE_MODEL_PATH = "models/yolov8n.pt"
@@ -214,7 +217,9 @@ class ANPRProcessor:
             'vehicle_type': "unknown", # Associated vehicle type
             'vehicle_color': "unknown", # Associated vehicle color
             'time_details': None,     # Timestamp details from last sighting
-            'detection_count': 0      # How many frames this potential plate was seen in
+            'detection_count': 0,     # How many frames this potential plate was seen in
+            'best_image_path': None,  # Path to the best quality image saved for this plate group
+            'best_image_conf': 0.0    # Confidence score associated with the best image
         })
         # Track globally saved plates for the entire processing session
         self.saved_plates = set()  # Plates already saved to DB in this run
@@ -509,11 +514,22 @@ class ANPRProcessor:
             latest_seen_time_for_group = 0
 
             group_keys = []
+            # --- Find best image within the group --- 
+            group_best_image_path = None
+            group_best_image_conf = 0.0
+            # --- 
+            
             for index in indices:
                 plate_key = plates[index]
                 group_keys.append(plate_key)
                 data = self.plate_tracker[plate_key]
                 all_readings_in_group.extend(data['readings'])
+                
+                # --- Track best image path/conf within the group ---
+                if data.get('best_image_path') and data.get('best_image_conf', 0) > group_best_image_conf:
+                    group_best_image_path = data['best_image_path']
+                    group_best_image_conf = data['best_image_conf']
+                # --- 
                 
                 if data['first_seen'] is not None:
                     first_seen = min(first_seen, data['first_seen'])
@@ -563,13 +579,19 @@ class ANPRProcessor:
                         'detection_count': total_detections,
                         'vehicle_type': latest_vehicle_type, 
                         'vehicle_color': latest_vehicle_color,
-                        'time_details': latest_time_details
+                        'time_details': latest_time_details,
+                        'image_filename': group_best_image_path # Add image filename here
                     }
             else:
                  logger.debug(f"Discarding group {group_keys} after voting. Voted plate: '{voted_plate}'")
 
         # Clear the old tracker after consolidation
-        self.plate_tracker.clear()
+        # **Important:** We do NOT clear the tracker here anymore.
+        # Consolidation now returns the data, but the tracker itself might still be needed
+        # if save_to_database fails or for other potential future logic.
+        # Clearing should happen *after* successful DB save potentially.
+        # For now, let's leave the tracker uncleared here.
+        # self.plate_tracker.clear() 
         logger.info(f"Consolidation finished. Final plates: {len(consolidated_plates)}")
         return consolidated_plates
         
@@ -661,61 +683,80 @@ class ANPRProcessor:
             conn.autocommit = False  # Explicit transaction control
 
             with conn.cursor() as cursor:
-                # Create records for all filtered plates
-                records = [
-                    (
-                        datetime.fromtimestamp(data['first_seen']).isoformat(),
-                        datetime.fromtimestamp(data['last_seen']).isoformat(),
-                        plate,
-                        # data['max_confidence'], # Old: Max confidence from tracker
-                        data['avg_confidence'], # New: Average confidence after voting
-                        # data['count'], # Old: Count from tracker
-                        data['detection_count'], # New: Total detections from consolidation
-                        data['vehicle_type'],
-                        data['vehicle_color'], # Restore original vehicle color saving
-                        data['time_details']['time_of_day'],
-                        data['time_details']['day_of_week'],
+                # Prepare records including the image filename
+                records_to_insert = []
+                for plate, data in new_plates.items():
+                    # Ensure time_details is available
+                    time_details = data.get('time_details')
+                    if not time_details:
+                        logger.warning(f"Skipping plate {plate} due to missing time_details.")
+                        continue 
+                    
+                    records_to_insert.append(
+                        (
+                            datetime.fromtimestamp(data['first_seen']).isoformat(),
+                            datetime.fromtimestamp(data['last_seen']).isoformat(),
+                            plate,
+                            data['avg_confidence'],
+                            data['detection_count'],
+                            data['vehicle_type'],
+                            data['vehicle_color'],
+                            time_details.get('time_of_day'), # Use .get for safety
+                            time_details.get('day_of_week'), # Use .get for safety
+                            data.get('image_filename') # Add image filename (can be None)
+                        )
                     )
-                    for plate, data in new_plates.items()
-                ]
 
-                # Final deduplication step for this specific run
-                if records:
+                # Final deduplication based on license plate within this batch
+                if records_to_insert:
                     final_unique_records = []
-                    seen_plates_in_run = set()
-                    for record in records:
-                        plate_str = record[2] # License plate is the 3rd element (index 2)
-                        if plate_str not in seen_plates_in_run:
+                    seen_plates_in_batch = set()
+                    for record in records_to_insert:
+                        plate_str = record[2] # License plate
+                        if plate_str not in seen_plates_in_batch:
                             final_unique_records.append(record)
-                            seen_plates_in_run.add(plate_str)
+                            seen_plates_in_batch.add(plate_str)
                         else:
-                            logger.warning(f"Duplicate plate '{plate_str}' detected after consolidation for this run. Keeping only first instance.")
-
+                            # Find existing record to potentially update image if current is better?
+                            # For now, simpler: just log the duplicate within the batch.
+                            logger.warning(f"Duplicate plate '{plate_str}' detected within save batch. Keeping first instance.")
+                            
                     if not final_unique_records:
-                        logger.info("No unique records left after final deduplication.")
-                        return # Exit if deduplication removed everything
+                        logger.info("No unique records left after final batch deduplication.")
+                        return 
 
-                    logger.info(f"Inserting {len(final_unique_records)} unique records into DB (filtered from {len(records)} consolidated records)." )
-                    # Use final_unique_records for insertion
-                    cursor.executemany("""
+                    logger.info(f"Inserting {len(final_unique_records)} unique records into DB.")
+                    
+                    # Update INSERT statement to include image_filename
+                    sql_insert = """
                         INSERT INTO detected_plates
                         (start_time, end_time, license_plate, confidence, detection_count, 
-                        vehicle_type, vehicle_color, time_of_day, day_of_week)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT DO NOTHING
-                    """, final_unique_records)
+                         vehicle_type, vehicle_color, time_of_day, day_of_week, image_filename)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (license_plate) DO UPDATE SET -- Example: Update on conflict
+                            end_time = EXCLUDED.end_time,       -- Update last seen time
+                            confidence = GREATEST(detected_plates.confidence, EXCLUDED.confidence), -- Keep highest confidence
+                            detection_count = detected_plates.detection_count + EXCLUDED.detection_count, -- Accumulate count
+                            vehicle_type = EXCLUDED.vehicle_type,   -- Update vehicle info
+                            vehicle_color = EXCLUDED.vehicle_color,
+                            time_of_day = EXCLUDED.time_of_day,
+                            day_of_week = EXCLUDED.day_of_week,
+                            -- Update image only if new one is provided and maybe based on confidence? Simpler: update if provided.
+                            image_filename = COALESCE(EXCLUDED.image_filename, detected_plates.image_filename)
+                    """
+                    # Note: ON CONFLICT requires a unique constraint on license_plate in your DB.
+                    # If you don't have one, use ON CONFLICT DO NOTHING or handle updates differently.
+                    # Assuming ON CONFLICT (license_plate) DO UPDATE for better merging over time.
+                    
+                    cursor.executemany(sql_insert, final_unique_records)
 
                     conn.commit()
-                    logger.info(f"Successfully saved {cursor.rowcount} consolidated plates")
+                    rows_affected = cursor.rowcount # Might not be accurate for ON CONFLICT DO UPDATE in all PG versions
+                    logger.info(f"Database commit successful. Rows affected/updated indication: {rows_affected}")
                     
-                    # Add successfully saved plates to our session-wide tracking set
+                    # Add successfully saved/updated plates to our session-wide tracking set
                     for record in final_unique_records:
                         self.saved_plates.add(record[2])  # Add the plate to saved set
-
-                # Clearing tracker is now handled within consolidate_plates
-                # for plate in filtered_plates:
-                #     if plate in self.plate_tracker:
-                #         del self.plate_tracker[plate]
 
         except Exception as e:
             logger.error(f"Database error: {str(e)}")
@@ -758,6 +799,12 @@ class ANPRProcessor:
                     
                     # Crop the detected plate region and run OCR
                     plate_img = frame[y1:y2, x1:x2]
+                    
+                    # Check if plate_img is valid before proceeding
+                    if plate_img is None or plate_img.size == 0:
+                        logger.warning(f"Skipping empty plate image crop at box: {(x1, y1, x2, y2)}")
+                        continue # Skip to the next detection
+                        
                     plate_text, plate_conf = self.ocr_license_plate(plate_img)
                     logger.info(f"OCR result: '{plate_text}' with confidence {plate_conf:.2f}")
                     
@@ -772,25 +819,45 @@ class ANPRProcessor:
                             vx1, vy1, vx2, vy2 = v['box']
                             vehicle_roi = frame[vy1:vy2, vx1:vx2]
                             vehicle_color = self.predict_vehicle_color(vehicle_roi)
-                        
+                            
                         # Update tracker with the *raw* OCR reading for potential consolidation later
                         now = time.time()
                         # Use plate_text as the initial key
                         key_plate_text = plate_text 
 
+                        tracker_entry = self.plate_tracker[key_plate_text]
+                        
                         # Append the current reading
-                        self.plate_tracker[key_plate_text]['readings'].append((plate_text, plate_conf))
+                        tracker_entry['readings'].append((plate_text, plate_conf))
                         
                         # Update timestamps and other metadata
-                        if self.plate_tracker[key_plate_text]['first_seen'] is None:
-                            self.plate_tracker[key_plate_text]['first_seen'] = now
-                        self.plate_tracker[key_plate_text]['last_seen'] = now
-                        self.plate_tracker[key_plate_text]['vehicle_type'] = vehicle_type
-                        self.plate_tracker[key_plate_text]['vehicle_color'] = vehicle_color
-                        self.plate_tracker[key_plate_text]['time_details'] = time_details
-                        self.plate_tracker[key_plate_text]['detection_count'] += 1
+                        if tracker_entry['first_seen'] is None:
+                            tracker_entry['first_seen'] = now
+                        tracker_entry['last_seen'] = now
+                        tracker_entry['vehicle_type'] = vehicle_type
+                        tracker_entry['vehicle_color'] = vehicle_color
+                        tracker_entry['time_details'] = time_details
+                        tracker_entry['detection_count'] += 1
+                        
+                        # --- Save best image based on confidence --- 
+                        if plate_conf > tracker_entry['best_image_conf']:
+                            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3] # Include milliseconds
+                            # Create a relatively unique filename
+                            image_filename = f"{plate_text}_{timestamp_str}.jpg"
+                            save_path = PLATE_IMAGE_DIR / image_filename
+                            try:
+                                success = cv2.imwrite(str(save_path), plate_img)
+                                if success:
+                                    tracker_entry['best_image_path'] = image_filename # Store relative path
+                                    tracker_entry['best_image_conf'] = plate_conf
+                                    logger.info(f"Saved new best image for '{key_plate_text}' with conf {plate_conf:.2f}: {image_filename}")
+                                else:
+                                    logger.warning(f"Failed to save image: {save_path}")
+                            except Exception as img_save_error:
+                                logger.error(f"Error saving image {save_path}: {img_save_error}", exc_info=True)
+                        # ------------------------------------------
 
-                        logger.info(f"Added reading '{plate_text}' ({plate_conf:.2f}) to tracker key '{key_plate_text}'. Count: {self.plate_tracker[key_plate_text]['detection_count']}")
+                        logger.info(f"Added reading '{plate_text}' ({plate_conf:.2f}) to tracker key '{key_plate_text}'. Count: {tracker_entry['detection_count']}")
                         
                         # Draw bounding box and OCR annotation on the frame (using the current frame's OCR result)
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)

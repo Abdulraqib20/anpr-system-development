@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
-from flask import Flask, render_template, jsonify, g
+from flask import Flask, render_template, jsonify, g, send_from_directory, abort
 from dotenv import load_dotenv
 import logging
 from logging.handlers import RotatingFileHandler
@@ -25,6 +25,11 @@ from config.appconfig import (
 SCRIPT_DIR = Path(__file__).parent.resolve()
 # Project root is one level up from src/
 PROJECT_ROOT = SCRIPT_DIR.parent 
+# Correct Output directory used by anpr_new.py
+OUTPUT_DIR = PROJECT_ROOT / "output_plates" 
+PLATE_IMAGE_DIR = OUTPUT_DIR / "plate_images"
+# Ensure the directory exists (optional here, as anpr_new should create it)
+# PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Logging Setup ---
 LOGS_DIR = PROJECT_ROOT / "logs"
@@ -135,12 +140,12 @@ def index():
     if conn:
         try:
             with conn.cursor() as cur:
-                # Fetch recent detections
+                # Fetch recent detections, including image_filename
                 logger.debug("Executing DB query for recent detections.")
                 cur.execute("""
                     SELECT license_plate, start_time, end_time, confidence, 
                            detection_count, vehicle_type, vehicle_color, 
-                           time_of_day, day_of_week
+                           time_of_day, day_of_week, image_filename
                     FROM detected_plates
                     ORDER BY end_time DESC
                     LIMIT 50 
@@ -246,6 +251,28 @@ def api_detections():
     else:
         logger.debug("Returning successful API response.")
         return jsonify({"detections": detections})
+
+# New route to serve plate images
+@app.route('/plate_images/<path:filename>')
+def serve_plate_image(filename):
+    """Serves images from the PLATE_IMAGE_DIR."""
+    logger.debug(f"Request received to serve image: {filename}")
+    # Use absolute path for send_from_directory for clarity and robustness
+    absolute_image_dir = PLATE_IMAGE_DIR.resolve()
+    logger.debug(f"Serving from directory: {absolute_image_dir}")
+    try:
+        # Security: Basic check to prevent path traversal - ensure filename doesn't contain '..'
+        if '..' in filename or filename.startswith('/'):
+             logger.warning(f"Potential path traversal attempt blocked for filename: {filename}")
+             abort(404) # Not Found is appropriate here
+
+        return send_from_directory(absolute_image_dir, filename, as_attachment=False)
+    except FileNotFoundError:
+        logger.error(f"Image file not found: {filename} in {absolute_image_dir}")
+        abort(404)
+    except Exception as e:
+        logger.error(f"Error serving image {filename}: {e}", exc_info=True)
+        abort(500)
 
 # --- Main Execution ---
 if __name__ == '__main__':

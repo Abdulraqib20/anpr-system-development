@@ -18,7 +18,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="bi bi-car-front-fill"></i> UNILORIN ANPR
+                <i class="bi bi-car-front-fill"></i> UNILORIN ANPR SYSTEM
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
                     aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
@@ -42,6 +42,18 @@
             </div>
         </div>
     </nav>
+
+    <!-- Project Description Banner -->
+    <div class="project-banner bg-light border-bottom mb-4 shadow-sm">
+        <div class="container py-3 text-center">
+            <p class="lead mb-1" style="font-size: 30px; font-weight: bold;">Development of an Automatic Number Plate Recognition System</p>
+            <p class="text-muted small mb-0">
+                A final-year project by <strong class="text-dark">raqibcodes</strong> (Department of Computer Engineering, University of Ilorin)
+                <br>in partial fulfilment of the requirements for the Award of a Bachelor of Engineering (B.Eng) Degree in Computer Engineering.
+            </p>
+        </div>
+    </div>
+    <!-- End Project Description Banner -->
 
     <main class="container mt-4">
         {% block content %}
