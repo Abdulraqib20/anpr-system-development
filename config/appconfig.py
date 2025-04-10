@@ -29,7 +29,7 @@ try:
 
     # Required environment variables
     REQUIRED_VARS = [
-        'DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_PORT', 'ROBOFLOW_API_KEY'
+        'DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_PORT', 'ROBOFLOW_API_KEY', 'GROQ_API_KEY'
     ]
 
     # Load environment variables
@@ -47,8 +47,9 @@ try:
     DB_PASSWORD = config['DB_PASSWORD']
     DB_PORT = config['DB_PORT']
     ROBOFLOW_API_KEY = config['ROBOFLOW_API_KEY']
+    GROQ_API_KEY = config['GROQ_API_KEY']
 
-    sensitive_vars = ['DB_PASSWORD', 'ROBOFLOW_API_KEY']
+    sensitive_vars = ['DB_PASSWORD', 'ROBOFLOW_API_KEY', 'GROQ_API_KEY']
     for var in REQUIRED_VARS:
         value = locals().get(var, '')
         logged_value = f"{value[:2]}****{value[-2:]}" if var in sensitive_vars and len(value) > 4 else str(value)

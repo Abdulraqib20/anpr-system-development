@@ -56,6 +56,21 @@ file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=1024*1024, backupCoun
 file_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
 
+# --- Configure Werkzeug Logger ---
+werkzeug_logger = logging.getLogger('werkzeug')
+# Clear existing handlers if any (to avoid duplicates or unwanted destinations)
+werkzeug_logger.handlers.clear()
+# Set level (INFO captures request/response logs)
+werkzeug_logger.setLevel(logging.INFO)
+# Add the same handlers used by the main app logger
+werkzeug_logger.addHandler(stream_handler) # To console
+werkzeug_logger.addHandler(file_handler)   # To web.log
+# Prevent werkzeug logs from propagating to the root logger
+# This stops them from potentially being caught by handlers configured elsewhere (e.g., in config.log)
+werkzeug_logger.propagate = False
+logger.info("Werkzeug logger configured to use web app handlers and disable propagation.")
+# -------------------------------
+
 logger.info("--- ANPR Web App Starting --- ")
 logger.info(f"Logging configured. Log file: {LOG_FILE_PATH}")
 
