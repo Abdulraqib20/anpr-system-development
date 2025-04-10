@@ -3,7 +3,6 @@ import sys
 import cv2
 import re
 import logging
-import math
 import time
 import random
 from pathlib import Path
@@ -12,12 +11,14 @@ from datetime import datetime
 from collections import defaultdict
 from threading import Thread
 from queue import Queue
+import io
+import base64
 
 import numpy as np
 from ultralytics import YOLO
 import tensorflow as tf
 from keras import layers
-from paddleocr import PaddleOCR
+from groq import Groq
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
 from dotenv import load_dotenv
@@ -35,7 +36,8 @@ from config.appconfig import (
     DB_NAME, 
     DB_USER, 
     DB_PASSWORD, 
-    DB_PORT
+    DB_PORT,
+    GROQ_API_KEY
 )
 
 logs_dir = Path(__file__).parent.parent / "logs"
@@ -45,8 +47,11 @@ log_file_path = logs_dir / "config.log"
 # Set up logging
 logger = logging.getLogger("ANPR")
 logger.setLevel(logging.DEBUG)
+# Clear existing handlers to prevent duplication
 if logger.hasHandlers():
     logger.handlers.clear()
+# Prevent propagation to root logger to avoid duplicate logs
+logger.propagate = False
 
 # Console handler
 stream_handler = logging.StreamHandler()
@@ -66,22 +71,21 @@ logger.info(f"Logging to console and file: {log_file_path}")
 #--------------------------------------------------------------------------------------
 #  Configuration Variables
 #--------------------------------------------------------------------------------------
-
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output_plates"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-# Define directory for saving cropped plate images
-PLATE_IMAGE_DIR = OUTPUT_DIR / "plate_images"
+PLATE_IMAGE_DIR = OUTPUT_DIR / "plate_images" # directory for saving cropped plate images
 PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # VEHICLE_MODEL_PATH = "models/yolov8m-seg.pt"
 VEHICLE_MODEL_PATH = "models/yolov8n.pt"
 VEHICLE_COLOR_MODEL_PATH = "models/EFN-model.best.h5"
 MODEL_PATH="models/license_plate_detector.pt"
+GROQ_MODEL_NAME = "llama-3.2-11b-vision-preview"
 
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
-TRACKING_FRAMES=30
 MIN_CONFIDENCE=0.45
+GROQ_CONFIDENCE=0.90
 MIN_DETECTIONS=1
 
 db_params = {
@@ -104,12 +108,11 @@ def get_output_path(source_path=None):
     return OUTPUT_DIR / base_name
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="ANPR System")
+    parser = argparse.ArgumentParser(description="UNILORIN ANPR System")
     parser.add_argument(
         "--source",
         type=str,
-        default=str(PROJECT_ROOT / "Resources" / "car_vid.mp4"),
-        help="Input source (video path/image path/camera index)"
+        help="Input source (image path/camera index)"
     )
     return parser.parse_args()
 
@@ -132,7 +135,7 @@ class FixedDepthwiseConv2D(layers.DepthwiseConv2D):
         super().__init__(*args, **kwargs)
 
 #-------------------------------------------------------------------------------
-# Image Processor Class (Formerly VideoProcessor)
+# Image Processor Class
 #-------------------------------------------------------------------------------
 class ImageProcessor:
     """Handles image input/output operations"""
@@ -183,8 +186,6 @@ class ImageProcessor:
             logger.error(f"Error saving image {path_to_save}: {e}", exc_info=True)
             return False
 
-    # No release needed for image loading
-    # No __enter__ or __exit__ needed
 
 #-------------------------------------------------------------------------------
 # ANPR System Class
@@ -199,7 +200,19 @@ class ANPRProcessor:
         # Initialize components
         self.vehicle_model = YOLO(VEHICLE_MODEL_PATH)
         self.model = YOLO(MODEL_PATH)
-        self.ocr = PaddleOCR(use_angle_cls=True, use_gpu=False)
+
+        # --- Groq Initialization ---
+        if not GROQ_API_KEY:
+            logger.error("GROQ_API_KEY not found in environment/config.")
+            raise ValueError("GROQ_API_KEY is required for OCR.")
+        try:
+            self.groq_client = Groq(api_key=GROQ_API_KEY)
+            self.groq_model_name = GROQ_MODEL_NAME
+            logger.info(f"Groq client initialized with model: {self.groq_model_name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Groq client: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to initialize Groq client: {e}") from e
+        # ---------------------------
 
         # Track globally saved plates for the entire processing session
         self.saved_plates = set()  # Keep this for preventing duplicate DB entries across runs/calls
@@ -218,7 +231,7 @@ class ANPRProcessor:
             port=DB_PORT,
             connect_timeout=5
         )
-        logger.info("ANPRProcessor initialized for image processing.") # Updated log
+        logger.info("ANPRProcessor initialized for image processing with Groq Meta's Llama-3.1 Vision Model.")
     
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Type
@@ -346,7 +359,7 @@ class ANPRProcessor:
             adaptive_thresh = cv2.adaptiveThreshold(
                 blurred, 
                 255, # Max value
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, # Use Gaussian weighting for neighborhood
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, # Gaussian weighting for neighborhood
                 cv2.THRESH_BINARY, # Standard binary threshold
                 blockSize=15, # Size of the neighborhood area (must be odd)
                 C=7 # Constant subtracted from the calculated threshold
@@ -361,141 +374,170 @@ class ANPRProcessor:
             return adaptive_thresh
         except cv2.error as cv_err:
             logger.error(f"OpenCV error during preprocessing: {cv_err}")
-            return None # Return None on OpenCV errors
+            return None
         except Exception as e:
             logger.error(f"Unexpected error during preprocessing: {e}", exc_info=True)
-            return None # Return None on other errors
+            return None
     
+    #----------------------------------------------------------------------------------------------
+    # Helper: Clean Plate Text
+    #----------------------------------------------------------------------------------------------
+    def _clean_plate_text(self, raw_text: str) -> str:
+        """Cleans the raw OCR text to be uppercase alphanumeric only."""
+        if not isinstance(raw_text, str):
+            return ""
+        cleaned = re.sub(r'[^A-Z0-9]', '', raw_text.upper())
+        return cleaned
+
+    #----------------------------------------------------------------------------------------------
+    # Helper: Process Plate with Groq Meta's Llama-3.1 Vision Model
+    #----------------------------------------------------------------------------------------------
+    def _process_plate_with_groq(self, plate_image):
+        """Encodes plate image and calls Groq Vision API for OCR."""
+        try:
+            # Encode image to JPEG format in memory (suitable for Groq)
+            # Use high quality JPEG encoding
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
+            is_success, buffer = cv2.imencode(".jpg", plate_image, encode_param)
+            if not is_success:
+                logger.error("Failed to encode plate image to JPEG for Groq.")
+                return "" # Return empty string on encoding failure
+
+            image_bytes = buffer.tobytes()
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            image_media_type = 'image/jpeg' # Since we encoded to JPEG
+
+            logger.debug(f"Sending image (approx {len(image_base64)} base64 chars) to Groq model: {self.groq_model_name}")
+
+            chat_completion = self.groq_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": """STRICTLY identify the license plate in the image. Extract ONLY the alphanumeric characters (A-Z, 0-9) of the license plate number. Ensure the output is in ALL UPPERCASE. REMOVE ALL hyphens, spaces, symbols, or any other non-alphanumeric characters. Respond with ONLY the final cleaned license plate string (e.g., ABC123XY). Do NOT include any introductory text, labels, explanations, or markdown formatting. JUST the cleaned plate string."""
+                             },
+                             {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{image_media_type};base64,{image_base64}"
+                                }
+                             }
+                        ],
+                    }
+                ],
+                model=self.groq_model_name,
+                max_tokens=30,
+            )
+
+            raw_ocr_result = chat_completion.choices[0].message.content
+            # Use the internal cleaning function
+            cleaned_result = self._clean_plate_text(raw_ocr_result)
+            logger.info(f"Groq raw result: '{raw_ocr_result}', Cleaned result: '{cleaned_result}'")
+            return cleaned_result
+
+        except Exception as e:
+            # Catch potential Groq API errors (rate limits, auth issues, etc.)
+            logger.error(f"Error processing with Groq Vision API: {str(e)}", exc_info=True)
+            return "" # Return empty string on API error
+
     #----------------------------------------------------------------------------------------------
     # OCR License Plate
     #----------------------------------------------------------------------------------------------
     def ocr_license_plate(self, image):
-        """Perform OCR on license plate image"""
+        """Perform OCR on license plate image using Groq Vision."""
         try:
+            # Preprocessing might still be beneficial for Groq, keep it for now
             processed = self.preprocess_plate(image)
-            # Check if preprocessing failed
+            
+            # Determine which image to use for OCR
             if processed is None:
-                 logger.warning("Skipping OCR because preprocessing failed.")
-                 return "", 0.0
-            
-            # Log the preprocessed image for debugging (optional, can generate many files)
-            # debug_img_path = PLATE_IMAGE_DIR / f"preprocessed_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
-            # cv2.imwrite(str(debug_img_path), processed)
-            # logger.debug(f"Saved preprocessed image to {debug_img_path}")
-                 
-            result = self.ocr.ocr(processed, det=False, rec=True, cls=False)
-            logger.debug(f"Raw PaddleOCR result: {result}") # Log the raw result
-            
-            # Check if result is valid and has the expected structure
-            if not result or not result[0] or not isinstance(result[0], list) or not result[0][0]:
-                 logger.warning("PaddleOCR returned empty or invalid result.")
-                 return "", 0.0
-            
-            # If PaddleOCR returns multiple lines/candidates, process them
-            # For now, assume the most likely result is the first one as before
-            # but log if there are more than one.
-            if len(result[0]) > 1:
-                logger.debug(f"PaddleOCR returned {len(result[0])} potential text lines/candidates. Processing the first one.")
+                logger.warning("Preprocessing failed, attempting Groq OCR on original image.")
+                image_to_ocr = image # Fallback to original image
+            else:
+                logger.debug("Using preprocessed image for Groq OCR.")
+                image_to_ocr = processed
+                # Ensure preprocessed image is suitable for encoding
+                if len(image_to_ocr.shape) == 2: # Check if it's grayscale
+                    image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
+                elif len(image_to_ocr.shape) == 3 and image_to_ocr.shape[2] == 1: # Check if single channel 3D
+                    image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
 
-            texts = []
-            confidences = []
-            # Iterate through all lines returned for the first (and likely only) detection box
-            for line_info in result[0]: # result[0] contains list of [text, confidence] pairs
-                if isinstance(line_info, (list, tuple)) and len(line_info) == 2:
-                    text, conf = line_info
-                    if isinstance(text, str) and isinstance(conf, (float, int)):
-                         texts.append(text)
-                         confidences.append(float(conf))
-                    else:
-                         logger.warning(f"Unexpected format in PaddleOCR line result: {line_info}")
-                else:
-                    logger.warning(f"Unexpected structure in PaddleOCR result list item: {line_info}")
+            # Call Groq helper
+            cleaned_plate = self._process_plate_with_groq(image_to_ocr)
 
-            if not texts: # If no valid text/confidence pairs found
-                logger.warning("No valid text/confidence pairs extracted from PaddleOCR result.")
+            if not cleaned_plate:
+                logger.warning("Groq OCR did not return a valid plate string.")
                 return "", 0.0
                     
-            # Clean and validate text
-            combined = "".join(texts).upper()
-            # More aggressive cleaning: remove spaces and hyphens as well
-            cleaned = re.sub(r'[^A-Z0-9]', '', combined) 
-            logger.debug(f"Combined text: '{combined}', Cleaned text: '{cleaned}'")
-            
-            # Initial regex check
-            avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
-            if PLATE_REGEX.fullmatch(cleaned):
-                logger.info(f"Valid plate format found: '{cleaned}' with avg confidence {avg_conf:.2f}")
-                return cleaned, avg_conf
+            # Apply regex validation and correction heuristic directly to Groq's cleaned output
+            if PLATE_REGEX.fullmatch(cleaned_plate):
+                logger.info(f"Valid plate format found via Groq: '{cleaned_plate}'")
+                # Return with default high confidence
+                return cleaned_plate, GROQ_CONFIDENCE
             else:
-                 logger.warning(f"Cleaned text '{cleaned}' ({len(cleaned)} chars) does not match PLATE_REGEX {PLATE_REGEX.pattern}. Attempting correction...")
+                logger.warning(f"Groq result '{cleaned_plate}' ({len(cleaned_plate)} chars) does not match PLATE_REGEX {PLATE_REGEX.pattern}. Attempting correction...")
 
-                 # --- Post-OCR Correction Heuristic (Length 7 -> 8) ---
-                 corrected_plate = None
-                 if len(cleaned) == 7:
-                     # Simple substitution map for potential last character errors (Digit -> Letter)
-                     # Extend this map as needed based on common errors
-                     correction_map = {
-                         '0': ['O', 'D'],
-                         '1': ['I', 'L', 'T'],
-                         '2': ['Z'],
-                         '5': ['S'],
-                         '8': ['B'],
-                         '9': ['P', 'N'] # Added N based on YAB658NP
-                         # Add Letter -> Digit if needed (e.g., 'S':['5'])
-                     }
-                     last_char = cleaned[-1]
-                     possible_corrections = correction_map.get(last_char, [])
-                     
-                     if possible_corrections:
-                         logger.debug(f"Attempting corrections for last char '{last_char}': {possible_corrections}")
-                         base = cleaned[:-1]
-                         for replacement in possible_corrections:
-                             potential_plate = base + replacement
-                             # --- Add detailed debug log here ---
-                             logger.debug(f"Testing correction: '{potential_plate}' against regex: '{PLATE_REGEX.pattern}'")
-                             # -----------------------------------
-                             if PLATE_REGEX.fullmatch(potential_plate):
-                                 corrected_plate = potential_plate
-                                 logger.info(f"Correction successful: '{cleaned}' -> '{corrected_plate}'")
-                                 break # Take the first successful correction
-                     else:
-                         logger.debug(f"No predefined corrections found for last char '{last_char}'.")
-                 # Add more heuristics here if needed (e.g., for len 6, or different positions)
-                 
-                 if corrected_plate:
-                      # Return corrected plate with original average confidence
-                      # Optionally slightly reduce confidence: return corrected_plate, avg_conf * 0.95 
-                      return corrected_plate, avg_conf 
-                 else:
-                      logger.warning(f"Correction failed for '{cleaned}'. Discarding.")
-                      return "", 0.0 # Return empty if regex doesn't match and correction fails
+                # --- Post-OCR Correction Heuristic (Length 7 -> 8) ---
+                corrected_plate = None
+                if len(cleaned_plate) == 7:
+                    # Simple substitution map
+                    correction_map = {
+                        '0': ['O', 'D'], '1': ['I', 'L', 'T'], '2': ['Z'],
+                        '5': ['S'], '8': ['B'], '9': ['P', 'N']
+                        # Add Letter -> Digit if needed
+                    }
+                    last_char = cleaned_plate[-1]
+                    possible_corrections = correction_map.get(last_char, [])
+                    
+                    if possible_corrections:
+                        logger.debug(f"Attempting corrections for Groq result last char '{last_char}': {possible_corrections}")
+                        base = cleaned_plate[:-1]
+                        for replacement in possible_corrections:
+                            potential_plate = base + replacement
+                            logger.debug(f"Testing Groq correction: '{potential_plate}' against regex: '{PLATE_REGEX.pattern}'")
+                            if PLATE_REGEX.fullmatch(potential_plate):
+                                corrected_plate = potential_plate
+                                logger.info(f"Groq Correction successful: '{cleaned_plate}' -> '{corrected_plate}'")
+                                break # Take the first successful correction
+                    else:
+                        logger.debug(f"No predefined corrections found for Groq result last char '{last_char}'.")
+                
+                if corrected_plate:
+                    # Return corrected plate with the default confidence
+                    return corrected_plate, GROQ_CONFIDENCE
+                else:
+                    logger.warning(f"Correction failed for Groq result '{cleaned_plate}'. Discarding.")
+                    return "", 0.0 # Return empty if regex doesn't match and correction fails
             
         except Exception as e:
-            logger.error(f"OCR Error: {str(e)}", exc_info=True)
+            # Catch errors specific to the OCR step (beyond the API call itself)
+            logger.error(f"Groq OCR processing step error: {str(e)}", exc_info=True)
             return "", 0.0
 
     #---------------------------------------------------------------------------------------------
     # Helper: Levenshtein Distance
     #---------------------------------------------------------------------------------------------
-    def _calculate_levenshtein_distance(self, s1, s2):
-        """Calculates the Levenshtein distance between two strings."""
-        if len(s1) < len(s2):
-            return self._calculate_levenshtein_distance(s2, s1)
+    # def _calculate_levenshtein_distance(self, s1, s2):
+    #     """Calculates the Levenshtein distance between two strings."""
+    #     if len(s1) < len(s2):
+    #         return self._calculate_levenshtein_distance(s2, s1)
 
-        if len(s2) == 0:
-            return len(s1)
+    #     if len(s2) == 0:
+    #         return len(s1)
 
-        previous_row = range(len(s2) + 1)
-        for i, c1 in enumerate(s1):
-            current_row = [i + 1]
-            for j, c2 in enumerate(s2):
-                insertions = previous_row[j + 1] + 1
-                deletions = current_row[j] + 1
-                substitutions = previous_row[j] + (c1 != c2)
-                current_row.append(min(insertions, deletions, substitutions))
-            previous_row = current_row
+    #     previous_row = range(len(s2) + 1)
+    #     for i, c1 in enumerate(s1):
+    #         current_row = [i + 1]
+    #         for j, c2 in enumerate(s2):
+    #             insertions = previous_row[j + 1] + 1
+    #             deletions = current_row[j] + 1
+    #             substitutions = previous_row[j] + (c1 != c2)
+    #             current_row.append(min(insertions, deletions, substitutions))
+    #         previous_row = current_row
         
-        return previous_row[-1]
+    #     return previous_row[-1]
 
     #---------------------------------------------------------------------------------------------
     # Save to Database
@@ -506,20 +548,36 @@ class ANPRProcessor:
             logger.info("No plates to save.")
             return
             
-        logger.info(f"After consolidation, found {len(detections)} potential plates:")
+        # Convert list to dictionary when needed
+        if isinstance(detections, list):
+            # Convert the list to a dictionary with plate_text as the key
+            detection_dict = {}
+            for detection in detections:
+                plate_text = detection.get('plate_text', '')
+                if plate_text:
+                    # Set first_seen and last_seen timestamps
+                    current_time = time.time()
+                    detection['first_seen'] = current_time
+                    detection['last_seen'] = current_time
+                    detection['detection_count'] = 1
+                    # Use plate_text as key and rename plate_confidence for consistency
+                    detection['plate_confidence'] = detection.get('plate_confidence', 0.0)
+                    detection_dict[plate_text] = detection
+            detections = detection_dict
+            
+        logger.info(f"Found {len(detections)} potential plates:")
         for plate, data in detections.items():
             logger.info(f"  Plate: {plate}, Confidence: {data['plate_confidence']:.2f}, " 
                       f"Vehicle: {data['vehicle_type']}, Color: {data['vehicle_color']}")
         
         # Track filtered plates for debugging
-        color_filtered = [] # Restore color filtering
+        color_filtered = []
         confidence_filtered = []
         detection_filtered = []
         
         filtered_plates = {}
         for plate, data in detections.items():
             # Check each filter condition separately for better logging
-            # Restore vehicle color check
             if data.get('vehicle_color', '').lower() == 'unknown':
                 color_filtered.append(plate)
                 continue
@@ -537,7 +595,6 @@ class ANPRProcessor:
             filtered_plates[plate] = data
             
         # Log detailed filtering results
-        # Restore color filtering log
         if color_filtered:
             logger.warning(f"Filtered out {len(color_filtered)} plates due to unknown vehicle color: {color_filtered}")
         if confidence_filtered:
@@ -546,35 +603,11 @@ class ANPRProcessor:
             logger.warning(f"Filtered out {len(detection_filtered)} plates due to low detection count (<{MIN_DETECTIONS}): {detection_filtered}")
         
         if not filtered_plates:
-            # Restore original warning message wording
-            logger.warning("All consolidated plates filtered out due to validation (color, count, confidence).")
+            logger.warning("All plates filtered out due to validation (color, count, confidence).")
             return
-            
-        # More aggressive similarity-based deduplication with the saved plates
-        new_plates = {}
-        similar_to_saved_plates = []
         
-        for plate, data in filtered_plates.items():
-            # Check if this plate is similar to any already saved plate
-            similar_to_saved = False
-            for saved_plate in self.saved_plates:
-                if self._calculate_levenshtein_distance(plate, saved_plate) <= 3:  # Using same threshold as consolidation
-                    logger.info(f"Skipping plate '{plate}' - similar to already saved plate '{saved_plate}'")
-                    similar_to_saved = True
-                    similar_to_saved_plates.append(plate)
-                    break
-            
-            if not similar_to_saved:
-                new_plates[plate] = data
-        
-        if similar_to_saved_plates:
-            logger.info(f"Filtered out {len(similar_to_saved_plates)} plates similar to already saved plates: {similar_to_saved_plates}")
-            
-        if not new_plates:
-            logger.info("All plates have already been saved to the database in this session.")
-            return
-            
-        logger.info(f"After session-level deduplication: {len(new_plates)}/{len(filtered_plates)} plates are new")
+        # Modified to allow duplicates at different times by removing session-level deduplication
+        logger.info(f"Preparing to save {len(filtered_plates)} valid plates to database")
 
         conn = None
         try:
@@ -584,7 +617,7 @@ class ANPRProcessor:
             with conn.cursor() as cursor:
                 # Prepare records including the image filename
                 records_to_insert = []
-                for plate, data in new_plates.items():
+                for plate, data in filtered_plates.items():
                     # Ensure time_details is available
                     time_details = data.get('time_details')
                     if not time_details:
@@ -600,13 +633,13 @@ class ANPRProcessor:
                             data['detection_count'],
                             data['vehicle_type'],
                             data['vehicle_color'],
-                            time_details.get('time_of_day'), # Use .get for safety
-                            time_details.get('day_of_week'), # Use .get for safety
-                            data.get('image_filename') # Add image filename (can be None)
+                            time_details.get('time_of_day'),
+                            time_details.get('day_of_week'),
+                            data.get('image_filename')
                         )
                     )
 
-                # Final deduplication based on license plate within this batch
+                # Insert all records - allow duplicates (just ensure they're unique within this batch)
                 if records_to_insert:
                     final_unique_records = []
                     seen_plates_in_batch = set()
@@ -626,36 +659,20 @@ class ANPRProcessor:
 
                     logger.info(f"Inserting {len(final_unique_records)} unique records into DB.")
                     
-                    # Update INSERT statement to include image_filename
+                    # Modified SQL - Remove ON CONFLICT clause to allow duplicates at different times
                     sql_insert = """
                         INSERT INTO detected_plates
                         (start_time, end_time, license_plate, confidence, detection_count, 
                          vehicle_type, vehicle_color, time_of_day, day_of_week, image_filename)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (license_plate) DO UPDATE SET -- Example: Update on conflict
-                            end_time = EXCLUDED.end_time,       -- Update last seen time
-                            confidence = GREATEST(detected_plates.confidence, EXCLUDED.confidence), -- Keep highest confidence
-                            detection_count = detected_plates.detection_count + EXCLUDED.detection_count, -- Accumulate count
-                            vehicle_type = EXCLUDED.vehicle_type,   -- Update vehicle info
-                            vehicle_color = EXCLUDED.vehicle_color,
-                            time_of_day = EXCLUDED.time_of_day,
-                            day_of_week = EXCLUDED.day_of_week,
-                            -- Update image only if new one is provided and maybe based on confidence? Simpler: update if provided.
-                            image_filename = COALESCE(EXCLUDED.image_filename, detected_plates.image_filename)
                     """
-                    # Note: ON CONFLICT requires a unique constraint on license_plate in your DB.
-                    # If you don't have one, use ON CONFLICT DO NOTHING or handle updates differently.
-                    # Assuming ON CONFLICT (license_plate) DO UPDATE for better merging over time.
+                    # No ON CONFLICT clause to allow duplicates at different times
                     
                     cursor.executemany(sql_insert, final_unique_records)
 
                     conn.commit()
-                    rows_affected = cursor.rowcount # Might not be accurate for ON CONFLICT DO UPDATE in all PG versions
-                    logger.info(f"Database commit successful. Rows affected/updated indication: {rows_affected}")
-                    
-                    # Add successfully saved/updated plates to our session-wide tracking set
-                    for record in final_unique_records:
-                        self.saved_plates.add(record[2])  # Add the plate to saved set
+                    rows_affected = cursor.rowcount
+                    logger.info(f"Database commit successful. Rows affected: {rows_affected}")
 
         except Exception as e:
             logger.error(f"Database error: {str(e)}")
@@ -666,7 +683,7 @@ class ANPRProcessor:
                 self.db_pool.putconn(conn)
     
     #----------------------------------------------------------------------------------------------
-    # Process Image (Formerly Process Frame)
+    # Process Image
     #----------------------------------------------------------------------------------------------
     def process_image(self, frame): # Renamed method
         """Process a single image"""
@@ -677,9 +694,6 @@ class ANPRProcessor:
 
             # Detect vehicles
             vehicles = self.detect_vehicle_type(frame)
-            # Log vehicle details (optional, could be removed for cleaner logs in image mode)
-            # for vehicle in vehicles:
-            #     logger.debug(f"Vehicle details: {vehicle}")
 
             # Detect license plates
             results = self.model.predict(frame, conf=MIN_CONFIDENCE, verbose=False)
@@ -687,10 +701,9 @@ class ANPRProcessor:
             for result in results:
                 boxes = result.boxes.xyxy.cpu().numpy()
                 logger.info(f"Detected {len(boxes)} potential plates in image")
-                # classes = result.boxes.cls.cpu().numpy() # Class not used?
                 confidences = result.boxes.conf.cpu().numpy()
 
-                for box, conf in zip(boxes, confidences): # Removed unused cls
+                for box, conf in zip(boxes, confidences):
                     x1, y1, x2, y2 = map(int, box)
 
                     # Crop the detected plate region and run OCR
@@ -769,11 +782,11 @@ class ANPRProcessor:
         except Exception as e:
             logger.error(f"Error processing image: {e}", exc_info=True) # Added exc_info
 
-        # --- Display the result in a window ---
+        # --- Display the result in a window - auto-close after 5 seconds with no key press required ---
         try:
-            logger.info("Displaying processed image. Press any key in the window to continue...")
+            logger.info("Displaying processed image. Will automatically close after 5 seconds...")
             cv2.imshow("ANPR Image Result", frame)
-            # Change waitKey(0) to waitKey(5000) for 5-second display
+            # Use waitKey with 5000ms (5 seconds) timer - window closes automatically
             cv2.waitKey(5000) 
             cv2.destroyAllWindows()
             logger.info("Image display window closed.")
