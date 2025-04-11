@@ -324,7 +324,9 @@
 
 {% block scripts_extra %}
 <script>
-    // --- Configuration ---\n
+    // --- Configuration ---
+
+    const POLLING_INTERVAL_MS = 15000; // Check for updates every 15 seconds
     const ITEMS_PER_PAGE = 5; // Items per page for client-side pagination
     const PLATE_IMAGE_URL_BASE = "{{ url_for('serve_plate_image', filename='') }}";
     const ANNOTATED_IMAGE_URL_BASE = "{{ url_for('serve_output_image', filename='') }}";
@@ -695,7 +697,64 @@
     }
     // --- End Gallery Modal Handling ---\n
 
-    // --- Initial Data Load & Event Listeners ---\n
+    // --- Data Fetching and Updating ---
+    function fetchAndUpdateData() {
+        console.log("Checking for new detections..."); // Add a log for polling
+        // Optional: Add a subtle loading indicator specific to polling?
+
+        fetch("{{ url_for('api_detections') }}")
+            .then(response => {
+                if (!response.ok) {
+                    return response.text().then(text => { throw new Error(`HTTP error ${response.status}: ${text}`) });
+                }
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.indexOf("application/json") !== -1) {
+                    return response.json();
+                } else {
+                    return response.text().then(text => { throw new Error(`Expected JSON, got ${contentType}: ${text.substring(0, 100)}...`) });
+                }
+            })
+            .then(data => {
+                if (data.error) {
+                    throw new Error(`API Error: ${data.error}`);
+                }
+                const newDetections = data.detections || [];
+
+                // Basic check: If number of detections changed, update.
+                // More robust: Compare actual content if needed (more complex)
+                if (newDetections.length !== allDetections.length) {
+                    console.log(`Data updated. Old count: ${allDetections.length}, New count: ${newDetections.length}`);
+                    allDetections = newDetections;
+                    // Update total count stat
+                    if(totalDetectionsStat) totalDetectionsStat.textContent = allDetections.length;
+
+                    // Re-apply filters and sorting to the new data and render
+                    applyFilterAndSort(); 
+
+                    // Optional: Show a brief notification that data was updated?
+                } else {
+                    console.log("No change in detection count.");
+                }
+
+                // Ensure UI elements are correctly shown/hidden after initial load or update
+                if(loadingIndicator) loadingIndicator.style.display = 'none';
+                if(tableContainer) tableContainer.classList.remove('js-hide-until-load');
+                if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load'); // Hide error on successful fetch
+                // Pagination container visibility is handled by renderPaginationControls inside applyFilterAndSort
+
+            })
+            .catch(error => {
+                console.error('Error fetching or processing detections during update:', error);
+                // Decide how to handle errors during polling - maybe show a less intrusive error?
+                if(loadingIndicator) loadingIndicator.style.display = 'none'; // Hide main loader anyway
+                if(tableErrorPlaceholder && !tableContainer.classList.contains('js-hide-until-load')) { // Only show error if table was visible
+                    tableErrorPlaceholder.classList.remove('js-hide-until-load');
+                    if(tableErrorMessage) tableErrorMessage.textContent = `Failed to fetch updates. Error: ${error.message}`;
+                }
+            });
+    }
+
+    // --- Initial Data Load & Event Listeners ---
     document.addEventListener('DOMContentLoaded', () => {
         // Show loading indicator initially
         if(loadingIndicator) loadingIndicator.style.display = 'block';
@@ -704,44 +763,7 @@
         if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
         if(noDetectionsMessage) noDetectionsMessage.classList.add('js-hide-until-load');
 
-        fetch("{{ url_for('api_detections') }}")
-            .then(response => {
-                if (!response.ok) {
-                     return response.text().then(text => { throw new Error(`HTTP error ${response.status}: ${text}`) });
-                }
-                 // Check content type before parsing JSON
-                 const contentType = response.headers.get("content-type");
-                 if (contentType && contentType.indexOf("application/json") !== -1) {
-                     return response.json();
-                 } else {
-                     return response.text().then(text => { throw new Error(`Expected JSON, got ${contentType}: ${text.substring(0, 100)}...`) });
-                 }
-            })
-            .then(data => {
-                if (data.error) {
-                    throw new Error(`API Error: ${data.error}`);
-                }
-                allDetections = data.detections || [];
-                filteredDetections = [...allDetections]; // Initialize filtered list
-
-                // Update total count stat
-                if(totalDetectionsStat) totalDetectionsStat.textContent = allDetections.length;
-
-                // Initial render
-                applyFilterAndSort(); // This now renders table and pagination
-
-                // Show table & pagination, hide loading
-                 if(loadingIndicator) loadingIndicator.style.display = 'none';
-                 if(tableContainer) tableContainer.classList.remove('js-hide-until-load');
-                 // Pagination container visibility is handled by renderPaginationControls
-
-            })
-            .catch(error => {
-                console.error('Error fetching or processing detections:', error);
-                if(loadingIndicator) loadingIndicator.style.display = 'none';
-                if(tableErrorPlaceholder) tableErrorPlaceholder.classList.remove('js-hide-until-load');
-                if(tableErrorMessage) tableErrorMessage.textContent = `Failed to load detection data. Please check console and server logs. Error: ${error.message}`;
-            });
+        fetchAndUpdateData();
 
         // Add search listener (client-side filtering)
         if (searchInput) {
@@ -776,6 +798,9 @@
                 applyFilterAndSort(); // Re-sort and re-render
             });
         });
+
+        // Start polling for updates after initial load
+        setInterval(fetchAndUpdateData, POLLING_INTERVAL_MS);
     });
 
 </script>
