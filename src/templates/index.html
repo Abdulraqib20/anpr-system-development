@@ -2,6 +2,28 @@
 
 {% block title %}ANPR Dashboard{% endblock %}
 
+{% block head_extra %}
+<style>
+    .gallery-img {
+        width: 100%;
+        height: 150px; /* Adjust height as needed */
+        object-fit: cover; /* Crop image nicely */
+        border-bottom: 1px solid #dee2e6;
+    }
+    .gallery-card {
+        transition: transform .2s ease-in-out, box-shadow .2s ease-in-out;
+    }
+    .gallery-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important;
+    }
+    .gallery-card .card-footer {
+        background-color: rgba(248, 249, 250, 0.8);
+        font-weight: 500;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 
 <!-- Dashboard Stats -->
@@ -25,16 +47,12 @@
 </div>
 
 <!-- Detection Table Section -->
-<div class="card">
+<div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0"><i class="bi bi-table"></i> Recent Detections</h5>
-        <!-- Placeholder for Search/Filter -->
-        <!-- <div class="col-md-4">
-            <input type="text" class="form-control form-control-sm" placeholder="Filter plates...">
-        </div> -->
     </div>
     <div class="card-body">
-        {% if error %}
+        {% if error and not detections %}
             <div class="alert alert-danger" role="alert">
                 <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
             </div>
@@ -47,7 +65,6 @@
                             <th><i class="bi bi-person-badge"></i> Plate</th>
                             <th><i class="bi bi-clock-history"></i> Last Seen</th>
                             <th><i class="bi bi-check-circle"></i> Confidence</th>
-                            <th><i class="bi bi-eye"></i> Views</th>
                             <th><i class="bi bi-truck-front"></i> Vehicle</th>
                             <th><i class="bi bi-palette"></i> Color</th>
                             <th><i class="bi bi-clock"></i> Time</th>
@@ -78,7 +95,6 @@
                                   <div class="progress-bar {{ conf_bg }} text-dark fw-bold" style="width: {{ conf_val }}%">{{ '%.1f'|format(conf_val) }}%</div>
                                 </div>
                             </td>
-                            <td class="text-center">{{ det.detection_count if det.detection_count is not none else '-' }}</td>
                             <td>{{ det.vehicle_type | title if det.vehicle_type else '-' }}</td>
                             <td>
                                 {% if det.vehicle_color and det.vehicle_color != 'unknown' %}
@@ -105,6 +121,43 @@
         {% endif %}
     </div> {# End Card Body #}
 </div> {# End Card #}
+
+<!-- Detected Plate Gallery Section -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-images"></i> Detected Plate Gallery</h5>
+    </div>
+    <div class="card-body">
+        {% if error and not plate_images %}
+             {# Check if there was an error specifically related to loading images #}
+            {% if "Error loading image gallery" in error %}
+                <div class="alert alert-warning" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill"></i> Could not load plate images. Check logs.
+                </div>
+            {% endif %}
+        {% elif plate_images %}
+            <div class="row row-cols-2 row-cols-sm-3 row-cols-md-4 row-cols-lg-6 g-3">
+                {% for image in plate_images %}
+                <div class="col">
+                    <div class="card h-100 gallery-card shadow-sm">
+                        <img src="{{ url_for('serve_output_image', filename=image.filename) }}"
+                             class="card-img-top gallery-img"
+                             alt="Annotated Frame: {{ image.plate_text }}"
+                             loading="lazy">
+                        <div class="card-footer text-center small">
+                            <code>{{ image.filename }}</code>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="alert alert-secondary" role="alert">
+                 <i class="bi bi-info-circle"></i> No plate images found in the output directory yet.
+            </div>
+        {% endif %}
+    </div> {# End Card Body #}
+</div> {# End Gallery Card #}
 
 {% endblock %}
 
@@ -133,7 +186,8 @@
                     const textColor = vehicleColor && ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'].includes(vehicleColor) ? 'text-dark' : 'text-white';
                     const colorBadge = vehicleColor ? 
                         `<span class="badge ${textColor}" style="background-color: ${vehicleColor};">${det.vehicle_color.replace(/^\w/, c => c.toUpperCase())}</span>` : '-';
-
+                    
+                    // Example row structure - Adapt based on your actual table columns
                     const row = `
                         <tr>
                             <td><code>${det.license_plate}</code></td>
@@ -143,7 +197,6 @@
                                     <div class="progress-bar ${confBg} text-dark fw-bold" style="width: ${confVal}%">${confidence}%</div>
                                 </div>
                             </td>
-                             <td class="text-center">${det.detection_count !== null ? det.detection_count : '-'}</td>
                             <td>${det.vehicle_type ? det.vehicle_type.replace(/^\w/, c => c.toUpperCase()) : '-'}</td>
                             <td>${colorBadge}</td>
                             <td>${det.time_of_day ? det.time_of_day.replace(/^\w/, c => c.toUpperCase()) : '-'}</td>

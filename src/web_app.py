@@ -24,12 +24,14 @@ from config.appconfig import (
 # Get the directory containing this script (src/)
 SCRIPT_DIR = Path(__file__).parent.resolve()
 # Project root is one level up from src/
-PROJECT_ROOT = SCRIPT_DIR.parent 
-# Correct Output directory used by anpr_new.py
-OUTPUT_DIR = PROJECT_ROOT / "output_plates" 
+PROJECT_ROOT = SCRIPT_DIR.parent
+# Directory for annotated full frames (used for gallery)
+OUTPUT_DIR = PROJECT_ROOT / "output_plates"
+# Directory for cropped plate images (referenced in DB, served by serve_plate_image)
 PLATE_IMAGE_DIR = OUTPUT_DIR / "plate_images"
-# Ensure the directory exists (optional here, as anpr_new should create it)
-# PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+# Ensure the directories exist (optional here, as anpr_image should create them)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Logging Setup ---
 LOGS_DIR = PROJECT_ROOT / "logs"
@@ -142,16 +144,18 @@ def close_db(error):
 
 @app.route('/')
 def index():
-    """Renders the main page with the latest detections and stats."""
+    """Renders the main page with the latest detections, stats, and image gallery."""
     logger.info("Request received for index page ('/')")
     conn = get_db()
     detections = []
+    plate_images = [] # Initialize list for image gallery data
     stats = {
         'total_detections': 0,
         'today_detections': 0
     }
     error_message = None
 
+    # --- Fetch Detections and Stats from DB ---
     if conn:
         try:
             with conn.cursor() as cur:
@@ -198,17 +202,57 @@ def index():
         logger.error("Database connection pool not available for index request.")
         stats = {'total_detections': 'N/A', 'today_detections': 'N/A'}
 
-    # Check if template file exists before rendering (more debugging help)
+    # --- Fetch Images for Gallery ---
+    try:
+        # Scan OUTPUT_DIR for full annotated frames
+        logger.info(f"Scanning for annotated frame images in: {OUTPUT_DIR}")
+        image_files = []
+        if OUTPUT_DIR.is_dir(): # Check the correct directory
+            # Iterate through files, getting Path objects
+            for item in OUTPUT_DIR.iterdir(): # Iterate the correct directory
+                # Filter for files ending with .jpg or .png (adjust as needed)
+                if item.is_file() and item.suffix.lower() in ['.jpg', '.jpeg', '.png']:
+                    # Exclude files from the plate_images subdirectory
+                    if not item.parent.name == PLATE_IMAGE_DIR.name:
+                        # Get modification time for sorting
+                        mtime = item.stat().st_mtime
+                        image_files.append((item, mtime))
+
+            # Sort by modification time, newest first
+            image_files.sort(key=lambda x: x[1], reverse=True)
+
+            # Limit the number of images displayed? (e.g., latest 100)
+            max_gallery_images = 100
+            image_files = image_files[:max_gallery_images]
+
+            # Process filenames
+            for img_path, _ in image_files:
+                filename = img_path.name
+                # For full frames, maybe just use the filename or a simplified label
+                plate_text = filename # Or derive a label differently if needed
+                plate_images.append({'filename': filename, 'plate_text': plate_text})
+
+            logger.info(f"Found {len(plate_images)} annotated images for the gallery (max: {max_gallery_images}).")
+        else:
+            logger.warning(f"Annotated image directory not found or is not a directory: {OUTPUT_DIR}")
+
+    except Exception as e:
+        logger.error(f"Error scanning annotated image directory: {e}", exc_info=True)
+        # Optionally set an error message for the gallery part
+        error_message = error_message + " | Error loading image gallery." if error_message else "Error loading image gallery."
+
+    # --- Render Template ---
     template_path = TEMPLATE_DIR / 'index.html'
     if not template_path.is_file():
         logger.error(f"Template file not found at expected path: {template_path}")
         return f"Error: Template 'index.html' not found at {template_path}", 500
     
-    logger.debug("Rendering index.html template with detections and stats.")
+    logger.debug("Rendering index.html template with detections, stats, and image gallery data.")
     try:
         return render_template('index.html', 
                                detections=detections, 
                                stats=stats, 
+                               plate_images=plate_images, # Pass gallery data
                                error=error_message)
     except Exception as render_error:
         logger.error(f"Error rendering template 'index.html': {render_error}", exc_info=True)
@@ -267,26 +311,53 @@ def api_detections():
         logger.debug("Returning successful API response.")
         return jsonify({"detections": detections})
 
-# New route to serve plate images
-@app.route('/plate_images/<path:filename>')
-def serve_plate_image(filename):
-    """Serves images from the PLATE_IMAGE_DIR."""
-    logger.debug(f"Request received to serve image: {filename}")
-    # Use absolute path for send_from_directory for clarity and robustness
-    absolute_image_dir = PLATE_IMAGE_DIR.resolve()
-    logger.debug(f"Serving from directory: {absolute_image_dir}")
+# Route to serve annotated full frame images for the gallery
+@app.route('/output_images/<path:filename>')
+def serve_output_image(filename):
+    """Serves images from the OUTPUT_DIR for the gallery."""
+    logger.debug(f"Request received to serve gallery image: {filename}")
+    # Use absolute path for send_from_directory
+    absolute_output_dir = OUTPUT_DIR.resolve()
+    logger.debug(f"Serving from directory: {absolute_output_dir}")
     try:
-        # Security: Basic check to prevent path traversal - ensure filename doesn't contain '..'
+        # Security check
         if '..' in filename or filename.startswith('/'):
-             logger.warning(f"Potential path traversal attempt blocked for filename: {filename}")
-             abort(404) # Not Found is appropriate here
+             logger.warning(f"Potential path traversal attempt blocked for gallery filename: {filename}")
+             abort(404)
+        # Ensure the file requested is directly in OUTPUT_DIR, not subdirs like plate_images
+        requested_path = absolute_output_dir / filename
+        if not requested_path.is_file() or requested_path.parent != absolute_output_dir:
+             logger.warning(f"Attempt to access file outside designated gallery directory: {filename}")
+             abort(404)
 
-        return send_from_directory(absolute_image_dir, filename, as_attachment=False)
+        return send_from_directory(absolute_output_dir, filename, as_attachment=False)
     except FileNotFoundError:
-        logger.error(f"Image file not found: {filename} in {absolute_image_dir}")
+        logger.error(f"Gallery image file not found: {filename} in {absolute_output_dir}")
         abort(404)
     except Exception as e:
-        logger.error(f"Error serving image {filename}: {e}", exc_info=True)
+        logger.error(f"Error serving gallery image {filename}: {e}", exc_info=True)
+        abort(500)
+
+# Route to serve CROPPED plate images (for the table)
+@app.route('/plate_images/<path:filename>')
+def serve_plate_image(filename):
+    """Serves CROPPED plate images from the PLATE_IMAGE_DIR."""
+    logger.debug(f"Request received to serve CROPPED plate image: {filename}")
+    # Use absolute path for send_from_directory for clarity and robustness
+    absolute_plate_image_dir = PLATE_IMAGE_DIR.resolve()
+    logger.debug(f"Serving from directory: {absolute_plate_image_dir}")
+    try:
+        # Security: Basic check to prevent path traversal
+        if '..' in filename or filename.startswith('/'):
+             logger.warning(f"Potential path traversal attempt blocked for plate filename: {filename}")
+             abort(404)
+
+        return send_from_directory(absolute_plate_image_dir, filename, as_attachment=False)
+    except FileNotFoundError:
+        logger.error(f"CROPPED plate image file not found: {filename} in {absolute_plate_image_dir}")
+        abort(404)
+    except Exception as e:
+        logger.error(f"Error serving CROPPED plate image {filename}: {e}", exc_info=True)
         abort(500)
 
 # --- Main Execution ---
