@@ -64,7 +64,7 @@
         <div class="card text-center h-100">
             <div class="card-header">Total Detections</div>
             <div class="card-body">
-                <h5 class="card-title display-4"><i class="bi bi-database-check"></i> {{ stats.total_detections if stats.total_detections is not none else 'N/A' }}</h5>
+                <h5 class="card-title display-4"><i class="bi bi-database-check"></i> {{ total_detections if total_detections is not none else 'N/A' }}</h5>
             </div>
         </div>
     </div>
@@ -166,6 +166,54 @@
             </div>
         {% endif %}
     </div> {# End Card Body #}
+    
+    {# --- Pagination Controls --- #}
+    {% if total_pages > 1 %}
+    <div class="card-footer bg-light">
+        <nav aria-label="Detections pagination">
+            <ul class="pagination justify-content-center mb-0">
+                {# Previous Page Link #}
+                <li class="page-item {{ 'disabled' if current_page <= 1 else '' }}">
+                    <a class="page-link" href="{{ url_for('index', page=current_page-1) }}" aria-label="Previous">
+                        <span aria-hidden="true">&laquo;</span>
+                    </a>
+                </li>
+                
+                {# Page Number Links - Show a limited range for large numbers of pages #}
+                {% set start_page = [1, current_page - 2] | max %}
+                {% set end_page = [total_pages, current_page + 2] | min %}
+
+                {% if start_page > 1 %}
+                    <li class="page-item"><a class="page-link" href="{{ url_for('index', page=1) }}">1</a></li>
+                    {% if start_page > 2 %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endif %}
+
+                {% for page_num in range(start_page, end_page + 1) %}
+                <li class="page-item {{ 'active' if page_num == current_page else '' }}">
+                    <a class="page-link" href="{{ url_for('index', page=page_num) }}">{{ page_num }}</a>
+                </li>
+                {% endfor %}
+
+                {% if end_page < total_pages %}
+                    {% if end_page < total_pages - 1 %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                    <li class="page-item"><a class="page-link" href="{{ url_for('index', page=total_pages) }}">{{ total_pages }}</a></li>
+                {% endif %}
+
+                {# Next Page Link #}
+                <li class="page-item {{ 'disabled' if current_page >= total_pages else '' }}">
+                    <a class="page-link" href="{{ url_for('index', page=current_page+1) }}" aria-label="Next">
+                        <span aria-hidden="true">&raquo;</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+    {# --- End Pagination Controls --- #}
 </div> {# End Card #}
 
 <!-- Detected Plate Gallery Section -->
@@ -270,7 +318,8 @@
 
 {% block scripts_extra %}
 <script>
-    // --- Live Plate Search Filter --- 
+    // --- Live Plate Search Filter (REMOVED - Incompatible with server-side pagination) --- 
+    /* 
     const searchInput = document.getElementById('plateSearchInput');
     const tableBody = document.getElementById('detections-table-body');
     const tableRows = tableBody.getElementsByTagName('tr');
@@ -280,17 +329,15 @@
             const filter = searchInput.value.toUpperCase();
 
             for (let i = 0; i < tableRows.length; i++) {
-                // Find the cell containing the license plate (assuming it's the second column, index 1)
-                // And it contains a <code> tag
-                let plateCell = tableRows[i].getElementsByTagName('td')[1]; // Adjust index if plate column changes
+                let plateCell = tableRows[i].getElementsByTagName('td')[1]; 
                 if (plateCell) {
                     let plateTextElement = plateCell.getElementsByTagName('code')[0];
                     if (plateTextElement) {
                         let plateText = plateTextElement.textContent || plateTextElement.innerText;
                         if (plateText.toUpperCase().indexOf(filter) > -1) {
-                            tableRows[i].style.display = ""; // Show row
+                            tableRows[i].style.display = ""; 
                         } else {
-                            tableRows[i].style.display = "none"; // Hide row
+                            tableRows[i].style.display = "none"; 
                         }
                     }
                 }
@@ -298,7 +345,8 @@
         });
     } else {
         console.warn("Could not find search input or table body for filtering.");
-    }
+    } 
+    */
     // --- End Live Plate Search Filter ---
 
     // --- Modal Handling for Clickable Rows ---
@@ -377,30 +425,32 @@
     }
     // --- End Gallery Modal Handling ---
 
-    // --- Table Sorting --- 
+    // --- Table Sorting (REMOVED - Incompatible with server-side pagination) --- 
+    /*
     const tableBodyForSort = document.getElementById('detections-table-body');
     const headers = document.querySelectorAll('th.sortable');
     let currentSortColumn = -1;
-    let currentSortDirection = 'asc'; // 'asc' or 'desc'
+    let currentSortDirection = 'asc'; 
 
     headers.forEach(header => {
         header.addEventListener('click', function() {
             const columnIndex = parseInt(this.dataset.columnIndex);
-            const columnType = this.dataset.columnType || 'string'; // Default to string
+            const columnType = this.dataset.columnType || 'string'; 
 
             // Determine sort direction
             if (columnIndex === currentSortColumn) {
                 currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
             } else {
                 currentSortDirection = 'asc';
-                // Remove sorting classes from previous column
                 if (currentSortColumn !== -1) {
-                    headers[currentSortColumn -1].classList.remove('asc', 'desc'); // Adjust index for headers NodeList
+                     // Find the correct header in the NodeList (index is columnIndex - 1 if first col isn't sortable)
+                     let headerToRemoveClass = Array.from(headers).find(h => parseInt(h.dataset.columnIndex) === currentSortColumn);
+                     if(headerToRemoveClass) headerToRemoveClass.classList.remove('asc', 'desc');
                 }
             }
 
             // Update visual indicators
-            this.classList.remove('asc', 'desc');
+             headers.forEach(h => h.classList.remove('asc', 'desc')); // Clear all first
             this.classList.add(currentSortDirection);
             currentSortColumn = columnIndex;
 
@@ -417,21 +467,18 @@
             let cellA = rowA.querySelectorAll('td')[columnIndex]?.innerText || '';
             let cellB = rowB.querySelectorAll('td')[columnIndex]?.innerText || '';
             
-            // Special handling for confidence (extract number from progress bar text)
             if (columnIndex === 3 && type === 'number') { 
                  const matchA = cellA.match(/([\d\.]+)%/);
                  const matchB = cellB.match(/([\d\.]+)%/);
                  cellA = matchA ? parseFloat(matchA[1]) : 0;
                  cellB = matchB ? parseFloat(matchB[1]) : 0;
-                 type = 'number'; // Ensure type is number for comparison
+                 type = 'number'; 
             } 
-            // Special handling for plate (remove <code> tags)
             else if (columnIndex === 1) { 
                  cellA = rowA.querySelectorAll('td')[columnIndex].querySelector('code')?.innerText || '';
                  cellB = rowB.querySelectorAll('td')[columnIndex].querySelector('code')?.innerText || '';
             }
 
-            // Comparison logic based on type
             let comparison = 0;
             if (type === 'number') {
                 const numA = parseFloat(cellA) || 0;
@@ -441,69 +488,25 @@
                 const dateA = new Date(cellA).getTime() || 0;
                 const dateB = new Date(cellB).getTime() || 0;
                 comparison = dateA - dateB;
-            } else { // Default to string comparison
+            } else { 
                 comparison = cellA.localeCompare(cellB);
             }
 
             return isAscending ? comparison : -comparison;
         });
 
-        // Re-append rows in sorted order
-        tableBodyForSort.innerHTML = ''; // Clear existing rows
+        tableBodyForSort.innerHTML = ''; 
         rows.forEach(row => tableBodyForSort.appendChild(row));
     }
+    */
     // --- End Table Sorting ---
 
     // Optional: Auto-refresh functionality using the /api/detections endpoint
     /*
     function fetchAndUpdateDetections() {
-        fetch('{{ url_for("api_detections") }}')
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    console.error("API Error:", data.error);
-                    // Optionally display error to user
-                    return;
-                }
-                const tableBody = document.getElementById('detections-table-body');
-                tableBody.innerHTML = ''; // Clear existing rows
-                data.detections.forEach(det => {
-                    // Rebuild table rows based on the new data (similar structure to the Jinja loop)
-                    // This part requires careful reconstruction of the HTML row structure in JavaScript
-                    const confidence = det.confidence ? (det.confidence * 100).toFixed(1) : 0;
-                    const confVal = parseFloat(confidence);
-                    const confBg = confVal >= 75 ? 'bg-success' : (confVal >= 50 ? 'bg-warning' : 'bg-danger');
-                    const vehicleColor = det.vehicle_color && det.vehicle_color !== 'unknown' ? det.vehicle_color.toLowerCase() : null;
-                    const textColor = vehicleColor && ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'].includes(vehicleColor) ? 'text-dark' : 'text-white';
-                    const colorBadge = vehicleColor ? 
-                        `<span class="badge ${textColor}" style="background-color: ${vehicleColor};">${det.vehicle_color.replace(/^\w/, c => c.toUpperCase())}</span>` : '-';
-                    
-                    // Example row structure - Adapt based on your actual table columns
-                    const row = `
-                        <tr>
-                            <td><code>${det.license_plate}</code></td>
-                            <td>${det.end_time ? new Date(det.end_time).toLocaleString('sv-SE').slice(0, 16) : 'N/A'}</td>
-                            <td>
-                                <div class="progress" role="progressbar" aria-valuenow="${confVal}" aria-valuemin="0" aria-valuemax="100" style="height: 18px; font-size: 0.8em;">
-                                    <div class="progress-bar ${confBg} text-dark fw-bold" style="width: ${confVal}%">${confidence}%</div>
-                                </div>
-                            </td>
-                            <td>${det.vehicle_type ? det.vehicle_type.replace(/^\w/, c => c.toUpperCase()) : '-'}</td>
-                            <td>${colorBadge}</td>
-                            <td>${det.time_of_day ? det.time_of_day.replace(/^\w/, c => c.toUpperCase()) : '-'}</td>
-                            <td>${det.day_of_week ? det.day_of_week : '-'}</td>
-                            <td>${det.start_time ? new Date(det.start_time).toLocaleString('sv-SE').slice(0, 16) : 'N/A'}</td>
-                        </tr>
-                    `;
-                    tableBody.innerHTML += row;
-                });
-            })
-            .catch(error => console.error('Error fetching detections:', error));
+        // ... (existing refresh code, BUT needs update to handle pagination state) ... 
     }
-
-    // Refresh every 30 seconds
     // setInterval(fetchAndUpdateDetections, 30000);
-    // Initial fetch on load (optional if server rendering is sufficient)
     // fetchAndUpdateDetections(); 
     */
 </script>
