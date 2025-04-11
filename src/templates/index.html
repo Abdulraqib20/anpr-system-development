@@ -53,6 +53,19 @@
         content: '\2193'; /* Down Arrow */
         opacity: 1;
     }
+    /* Hide elements during JS loading/processing */
+    .js-hide-until-load {
+        display: none !important; /* Use !important to ensure override */
+    }
+    #loadingIndicator {
+        text-align: center;
+        padding: 2rem;
+        font-style: italic;
+        color: #6c757d;
+    }
+    #tableErrorPlaceholder {
+         margin-top: 1rem;
+    }
 </style>
 {% endblock %}
 
@@ -63,16 +76,18 @@
     <div class="col-md-6 mb-3 mb-md-0">
         <div class="card text-center h-100">
             <div class="card-header">Total Detections</div>
-            <div class="card-body">
-                <h5 class="card-title display-4"><i class="bi bi-database-check"></i> {{ total_detections if total_detections is not none else 'N/A' }}</h5>
+            <div class="card-body d-flex align-items-center justify-content-center">
+                {# The total count will be updated by JS after full data load #}
+                <h5 class="card-title display-4 mb-0"><i class="bi bi-database-check me-2"></i> <span id="totalDetectionsStat">...</span></h5>
             </div>
         </div>
     </div>
     <div class="col-md-6">
         <div class="card text-center h-100">
             <div class="card-header">Detections Today</div>
-            <div class="card-body">
-                <h5 class="card-title display-4"><i class="bi bi-calendar-check"></i> {{ stats.today_detections if stats.today_detections is not none else 'N/A' }}</h5>
+            <div class="card-body d-flex align-items-center justify-content-center">
+                 {# This stat still comes from the initial server load #}
+                <h5 class="card-title display-4 mb-0"><i class="bi bi-calendar-check me-2"></i> {{ stats.today_detections if stats.today_detections is not none else 'N/A' }}</h5>
             </div>
         </div>
     </div>
@@ -81,139 +96,69 @@
 <!-- Detection Table Section -->
 <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0"><i class="bi bi-table"></i> Recent Detections</h5>
-        <!-- Search Filter Input -->
+        <h5 class="mb-0"><i class="bi bi-table"></i> Detections</h5>
+        <!-- Search Filter Input - No longer a form -->
         <div class="col-md-4">
-            <input type="text" id="plateSearchInput" class="form-control form-control-sm" placeholder="Filter by license plate...">
+            <input type="text" id="plateSearchInput" class="form-control form-control-sm"
+                   placeholder="Filter by license plate...">
         </div>
     </div>
     <div class="card-body">
-        {% if error and not detections %}
-            <div class="alert alert-danger" role="alert">
-                <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
+        {# Loading indicator #}
+        <div id="loadingIndicator">
+            <div class="spinner-border spinner-border-sm text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
             </div>
-        {% elif detections %}
-            <div class="table-responsive">
-                <table class="table table-striped table-hover align-middle small">
-                    <thead class="table-dark">
-                        <tr>
-                            <th><i class="bi bi-card-image"></i> Image</th>
-                            <th class="sortable" data-column-index="1" data-column-type="string"><i class="bi bi-person-badge"></i> Plate</th>
-                            <th class="sortable" data-column-index="2" data-column-type="datetime"><i class="bi bi-clock-history"></i> Last Seen</th>
-                            <th class="sortable" data-column-index="3" data-column-type="number"><i class="bi bi-check-circle"></i> Confidence</th>
-                            <th class="sortable" data-column-index="4" data-column-type="string"><i class="bi bi-truck-front"></i> Vehicle</th>
-                            <th class="sortable" data-column-index="5" data-column-type="string"><i class="bi bi-palette"></i> Color</th>
-                            <th class="sortable" data-column-index="6" data-column-type="string"><i class="bi bi-clock"></i> Time</th>
-                            <th class="sortable" data-column-index="7" data-column-type="string"><i class="bi bi-calendar-week"></i> Day</th>
-                            <th class="sortable" data-column-index="8" data-column-type="datetime"><i class="bi bi-clock-history"></i> First Seen</th>
-                        </tr>
-                    </thead>
-                    <tbody id="detections-table-body"> {# Add ID for potential JS updates #}
-                        {% for det in detections %}
-                        <tr class="clickable-row"
-                            data-plate="{{ det.license_plate }}"
-                            data-last-seen="{{ det.end_time.strftime('%Y-%m-%d %H:%M:%S') if det.end_time else 'N/A' }}"
-                            data-first-seen="{{ det.start_time.strftime('%Y-%m-%d %H:%M:%S') if det.start_time else 'N/A' }}"
-                            data-confidence="{{ '%.1f'|format(det.confidence * 100) if det.confidence is not none else '0.0' }}"
-                            data-vehicle-type="{{ det.vehicle_type | title if det.vehicle_type else 'Unknown' }}"
-                            data-vehicle-color="{{ det.vehicle_color | title if det.vehicle_color else 'Unknown' }}"
-                            data-time-of-day="{{ det.time_of_day | title if det.time_of_day else 'N/A' }}"
-                            data-day-of-week="{{ det.day_of_week if det.day_of_week else 'N/A' }}"
-                            data-plate-image="{{ url_for('serve_plate_image', filename=det.image_filename) if det.image_filename else '' }}"
-                            data-annotated-image="{{ url_for('serve_output_image', filename=det.license_plate + '_' + det.end_time.strftime('%Y%m%d_%H%M%S') + '.jpg') if det.license_plate and det.end_time else '' }}"> {# Construct potential annotated image filename #}
-                            <td>
-                                {% if det.image_filename %}
-                                    <img src="{{ url_for('serve_plate_image', filename=det.image_filename) }}"
-                                         alt="Plate {{ det.license_plate }}"
-                                         class="img-thumbnail" 
-                                         style="max-height: 40px; width: auto;" 
-                                         loading="lazy">
-                                {% else %}
-                                    <i class="bi bi-image-alt text-muted" title="No image available"></i>
-                                {% endif %}
-                            </td>
-                            <td><code>{{ det.license_plate }}</code></td>
-                            <td>{{ det.end_time.strftime('%Y-%m-%d %H:%M') if det.end_time else 'N/A' }}</td>
-                            <td>
-                                {% set conf_val = det.confidence * 100 if det.confidence is not none else 0 %}
-                                {% set conf_bg = 'bg-success' if conf_val >= 75 else ('bg-warning' if conf_val >= 50 else 'bg-danger') %}
-                                <div class="progress" role="progressbar" aria-label="Confidence" aria-valuenow="{{ conf_val }}" aria-valuemin="0" aria-valuemax="100" style="height: 18px; font-size: 0.8em;">
-                                  <div class="progress-bar {{ conf_bg }} text-dark fw-bold" style="width: {{ conf_val }}%">{{ '%.1f'|format(conf_val) }}%</div>
-                                </div>
-                            </td>
-                            <td>{{ det.vehicle_type | title if det.vehicle_type else '-' }}</td>
-                            <td>
-                                {% if det.vehicle_color and det.vehicle_color != 'unknown' %}
-                                    {% set color = det.vehicle_color | lower %}
-                                    {# Simple heuristic for text color based on background #}
-                                    {% set text_color = 'text-dark' if color in ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'] else 'text-white' %}
-                                    <span class="badge {{ text_color }}" style="background-color: {{ color }};">{{ det.vehicle_color | title }}</span>
-                                {% else %}
-                                    -
-                                {% endif %}
-                            </td>
-                            <td>{{ det.time_of_day | title if det.time_of_day else '-' }}</td>
-                            <td>{{ det.day_of_week if det.day_of_week else '-' }}</td>
-                            <td>{{ det.start_time.strftime('%Y-%m-%d %H:%M') if det.start_time else 'N/A' }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        {% else %}
-            <div class="alert alert-info" role="alert">
-                <i class="bi bi-info-circle-fill"></i> No detections found in the database yet.
-            </div>
-        {% endif %}
+             Loading all detections...
+        </div>
+
+        {# Error message placeholder #}
+        <div id="tableErrorPlaceholder" class="alert alert-danger js-hide-until-load" role="alert">
+             <i class="bi bi-exclamation-triangle-fill me-2"></i> <span id="tableErrorMessage">Error placeholder</span>
+        </div>
+
+        {# Table structure - initially hidden #}
+        <div id="tableContainer" class="table-responsive js-hide-until-load">
+            <table class="table table-striped table-hover align-middle small">
+                <thead class="table-dark">
+                    <tr>
+                         {# Use data-column-key matching the keys in the JSON data #}
+                        <th><i class="bi bi-card-image"></i> Img</th>
+                        <th class="sortable" data-column-key="license_plate" data-column-type="string"><i class="bi bi-person-badge"></i> Plate</th>
+                        <th class="sortable" data-column-key="end_time" data-column-type="datetime"><i class="bi bi-clock-history"></i> Last Seen</th>
+                        <th class="sortable" data-column-key="confidence" data-column-type="number"><i class="bi bi-check-circle"></i> Conf.</th>
+                        <th class="sortable" data-column-key="vehicle_type" data-column-type="string"><i class="bi bi-truck-front"></i> Vehicle</th>
+                        <th class="sortable" data-column-key="vehicle_color" data-column-type="string"><i class="bi bi-palette"></i> Color</th>
+                        <th class="sortable" data-column-key="time_of_day" data-column-type="string"><i class="bi bi-clock"></i> Time</th>
+                        <th class="sortable" data-column-key="day_of_week" data-column-type="string"><i class="bi bi-calendar-week"></i> Day</th>
+                        <th class="sortable" data-column-key="start_time" data-column-type="datetime"><i class="bi bi-clock-history"></i> First Seen</th>
+                    </tr>
+                </thead>
+                <tbody id="detections-table-body">
+                    {# Rows will be populated by JavaScript #}
+                    {# Example placeholder row (optional) #}
+                    <!--
+                    <tr><td colspan="9" class="text-center text-muted">Loading data...</td></tr>
+                    -->
+                </tbody>
+            </table>
+        </div>
+
+        {# No detections message placeholder #}
+        <div id="noDetectionsMessage" class="alert alert-info js-hide-until-load mt-3" role="alert">
+            <i class="bi bi-info-circle-fill me-2"></i> No detections found matching the criteria.
+        </div>
     </div> {# End Card Body #}
-    
-    {# --- Pagination Controls --- #}
-    {% if total_pages > 1 %}
-    <div class="card-footer bg-light">
+
+    {# --- Client-side Pagination Controls Placeholder --- #}
+    <div id="paginationContainer" class="card-footer bg-light js-hide-until-load">
         <nav aria-label="Detections pagination">
-            <ul class="pagination justify-content-center mb-0">
-                {# Previous Page Link #}
-                <li class="page-item {{ 'disabled' if current_page <= 1 else '' }}">
-                    <a class="page-link" href="{{ url_for('index', page=current_page-1) }}" aria-label="Previous">
-                        <span aria-hidden="true">&laquo;</span>
-                    </a>
-                </li>
-                
-                {# Page Number Links - Show a limited range for large numbers of pages #}
-                {% set start_page = [1, current_page - 2] | max %}
-                {% set end_page = [total_pages, current_page + 2] | min %}
-
-                {% if start_page > 1 %}
-                    <li class="page-item"><a class="page-link" href="{{ url_for('index', page=1) }}">1</a></li>
-                    {% if start_page > 2 %}
-                        <li class="page-item disabled"><span class="page-link">...</span></li>
-                    {% endif %}
-                {% endif %}
-
-                {% for page_num in range(start_page, end_page + 1) %}
-                <li class="page-item {{ 'active' if page_num == current_page else '' }}">
-                    <a class="page-link" href="{{ url_for('index', page=page_num) }}">{{ page_num }}</a>
-                </li>
-                {% endfor %}
-
-                {% if end_page < total_pages %}
-                    {% if end_page < total_pages - 1 %}
-                        <li class="page-item disabled"><span class="page-link">...</span></li>
-                    {% endif %}
-                    <li class="page-item"><a class="page-link" href="{{ url_for('index', page=total_pages) }}">{{ total_pages }}</a></li>
-                {% endif %}
-
-                {# Next Page Link #}
-                <li class="page-item {{ 'disabled' if current_page >= total_pages else '' }}">
-                    <a class="page-link" href="{{ url_for('index', page=current_page+1) }}" aria-label="Next">
-                        <span aria-hidden="true">&raquo;</span>
-                    </a>
-                </li>
+            <ul id="paginationControls" class="pagination justify-content-center mb-0">
+                {# Pagination items will be generated by JavaScript #}
             </ul>
         </nav>
     </div>
-    {% endif %}
-    {# --- End Pagination Controls --- #}
+    {# --- End Client-side Pagination Controls --- #}
 </div> {# End Card #}
 
 <!-- Detected Plate Gallery Section -->
@@ -271,15 +216,16 @@
             </div>
             <div class="modal-body">
                 <div class="row">
-                    <div class="col-md-6">
+                    <div class="col-md-6 mb-3 mb-md-0">
                         <h6>Cropped Plate Image</h6>
-                        <img id="modalPlateImage" src="" alt="Cropped Plate Image" class="img-fluid rounded mb-3">
+                        <img id="modalPlateImage" src="" alt="Cropped Plate Image" class="img-fluid rounded">
                     </div>
                     <div class="col-md-6">
                         <h6>Annotated Frame (if available)</h6>
-                        <img id="modalAnnotatedImage" src="" alt="Annotated Frame Image" class="img-fluid rounded mb-3">
+                        <img id="modalAnnotatedImage" src="" alt="Annotated Frame Image" class="img-fluid rounded">
                     </div>
                 </div>
+                <hr>
                 <h6>Details:</h6>
                 <ul class="list-group list-group-flush">
                     <li class="list-group-item"><strong>License Plate:</strong> <span id="modalPlateText"></span></li>
@@ -318,39 +264,302 @@
 
 {% block scripts_extra %}
 <script>
-    // --- Live Plate Search Filter (REMOVED - Incompatible with server-side pagination) --- 
-    /* 
-    const searchInput = document.getElementById('plateSearchInput');
+    // --- Configuration ---\n
+    const ITEMS_PER_PAGE = 20; // Items per page for client-side pagination
+    const PLATE_IMAGE_URL_BASE = "{{ url_for('serve_plate_image', filename='') }}";
+    const ANNOTATED_IMAGE_URL_BASE = "{{ url_for('serve_output_image', filename='') }}";
+    const STATIC_PLACEHOLDER_URL = "{{ url_for('static', filename='images/placeholder.png') }}"; // Add a placeholder image
+
+    // --- State Variables ---\n
+    let allDetections = []; // Holds the full dataset from the API
+    let filteredDetections = []; // Holds currently filtered/sorted data
+    let currentPage = 1;
+    let currentSortKey = 'end_time'; // Default sort column key (must match data key)
+    let currentSortDirection = 'desc'; // Default sort direction
+
+    // --- DOM References ---\n
     const tableBody = document.getElementById('detections-table-body');
-    const tableRows = tableBody.getElementsByTagName('tr');
+    const searchInput = document.getElementById('plateSearchInput');
+    const paginationControls = document.getElementById('paginationControls');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const tableContainer = document.getElementById('tableContainer');
+    const noDetectionsMessage = document.getElementById('noDetectionsMessage');
+    const tableErrorPlaceholder = document.getElementById('tableErrorPlaceholder');
+    const tableErrorMessage = document.getElementById('tableErrorMessage');
+    const totalDetectionsStat = document.getElementById('totalDetectionsStat');
+    const sortableHeaders = document.querySelectorAll('th.sortable');
+    const paginationContainer = document.getElementById('paginationContainer');
 
-    if (searchInput && tableBody && tableRows) {
-        searchInput.addEventListener('keyup', function() {
-            const filter = searchInput.value.toUpperCase();
+    // --- Utility Functions ---\n
+    function formatDate(isoString) {
+        if (!isoString) return 'N/A';
+        try {
+            const date = new Date(isoString);
+            if (isNaN(date.getTime())) return 'Invalid Date'; // Check if date is valid
+            // Format like YYYY-MM-DD HH:MM
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            return `${year}-${month}-${day} ${hours}:${minutes}`;
+        } catch (e) {
+            console.error("Error formatting date:", isoString, e);
+            return 'Invalid Date';
+        }
+    }
 
-            for (let i = 0; i < tableRows.length; i++) {
-                let plateCell = tableRows[i].getElementsByTagName('td')[1]; 
-                if (plateCell) {
-                    let plateTextElement = plateCell.getElementsByTagName('code')[0];
-                    if (plateTextElement) {
-                        let plateText = plateTextElement.textContent || plateTextElement.innerText;
-                        if (plateText.toUpperCase().indexOf(filter) > -1) {
-                            tableRows[i].style.display = ""; 
-                        } else {
-                            tableRows[i].style.display = "none"; 
-                        }
-                    }
+    function formatConfidence(confidence) {
+        const confVal = confidence != null ? parseFloat(confidence) * 100 : 0;
+        const confBg = confVal >= 75 ? 'bg-success' : (confVal >= 50 ? 'bg-warning' : 'bg-danger');
+        return `
+            <div class="progress" role="progressbar" aria-label="Confidence" aria-valuenow="${confVal.toFixed(1)}" aria-valuemin="0" aria-valuemax="100" style="height: 18px; font-size: 0.8em;">
+              <div class="progress-bar ${confBg} text-dark fw-bold" style="width: ${confVal.toFixed(1)}%">${confVal.toFixed(1)}%</div>
+            </div>
+        `;
+    }
+
+    function formatVehicleColor(color) {
+        if (!color || color.toLowerCase() === 'unknown') return '-';
+        const lowerColor = color.toLowerCase();
+        // Basic check for valid CSS color name - might need adjustment
+        const isValidColor = CSS.supports('color', lowerColor);
+        const bgColor = isValidColor ? lowerColor : '#6c757d'; // Default grey if invalid
+        const textColor = ['white', 'yellow', 'silver', 'beige', 'gold', 'orange', 'pink', 'tan'].includes(lowerColor) ? 'text-dark' : 'text-white';
+        return `<span class="badge ${isValidColor ? textColor : 'text-white'}" style="background-color: ${bgColor};">${color.charAt(0).toUpperCase() + color.slice(1)}</span>`;
+    }
+
+    function formatTitle(text) {
+         if (text == null || text === '') return '-'; // Handle null or empty
+         // Basic title case
+         return String(text).charAt(0).toUpperCase() + String(text).slice(1).toLowerCase();
+    }
+
+    // --- Rendering Functions ---\n
+    function renderTablePage() {
+        if (!tableBody) {
+            console.error("Table body not found!");
+            return;
+        }
+        tableBody.innerHTML = ''; // Clear table
+        noDetectionsMessage.classList.add('js-hide-until-load'); // Hide message initially
+
+        const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+        const endIndex = startIndex + ITEMS_PER_PAGE;
+        const pageData = filteredDetections.slice(startIndex, endIndex);
+
+        if (pageData.length === 0) {
+            if (allDetections.length > 0) { // Only show if there was data but filter removed it
+                 noDetectionsMessage.classList.remove('js-hide-until-load');
+            }
+            return; // Stop if no data for this page
+        }
+
+        pageData.forEach(det => {
+            const plateImgHtml = det.image_filename ?
+                `<img src="${PLATE_IMAGE_URL_BASE}${det.image_filename}"
+                      alt="Plate ${det.license_plate}" class="img-thumbnail"
+                      style="max-height: 40px; width: auto;" loading="lazy">` :
+                `<i class="bi bi-image-alt text-muted" title="No image available"></i>`;
+
+            // Try to construct annotated image filename (requires consistent naming)
+            // Example: PLATE_YYYYMMDD_HHMMSS.jpg
+            let annotatedImageUrl = '';
+            if (det.license_plate && det.end_time) {
+                 try {
+                    const dt = new Date(det.end_time);
+                    const timestamp = dt.toISOString().replace(/[:T.-]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
+                    // PROBLEM: Microseconds/exact timestamp might differ from filename saved by Python script
+                    // For now, link to placeholder or leave empty if constructing is unreliable
+                    // A better solution is to save the *exact* annotated filename in the DB
+                    annotatedImageUrl = STATIC_PLACEHOLDER_URL; // Fallback until DB stores exact filename
+                 } catch (e) { /* ignore date parsing error */ }
+            }
+
+
+            const row = document.createElement('tr');
+            row.classList.add('clickable-row');
+            // Add data attributes for the modal
+            row.dataset.plate = det.license_plate || '';
+            row.dataset.lastSeen = det.end_time || 'N/A';
+            row.dataset.firstSeen = det.start_time || 'N/A';
+            row.dataset.confidence = det.confidence != null ? (det.confidence * 100).toFixed(1) : '0.0';
+            row.dataset.vehicleType = formatTitle(det.vehicle_type);
+            row.dataset.vehicleColor = formatTitle(det.vehicle_color);
+            row.dataset.timeOfDay = formatTitle(det.time_of_day);
+            row.dataset.dayOfWeek = det.day_of_week || 'N/A';
+            row.dataset.plateImage = det.image_filename ? `${PLATE_IMAGE_URL_BASE}${det.image_filename}` : '';
+            row.dataset.annotatedImage = annotatedImageUrl; // Use constructed or placeholder URL
+
+            row.innerHTML = `
+                <td>${plateImgHtml}</td>
+                <td><code>${det.license_plate || '-'}</code></td>
+                <td>${formatDate(det.end_time)}</td>
+                <td>${formatConfidence(det.confidence)}</td>
+                <td>${formatTitle(det.vehicle_type)}</td>
+                <td>${formatVehicleColor(det.vehicle_color)}</td>
+                <td>${formatTitle(det.time_of_day)}</td>
+                <td>${det.day_of_week || '-'}</td>
+                <td>${formatDate(det.start_time)}</td>
+            `;
+            // Attach modal listener here after row is created
+            attachModalListener(row);
+            tableBody.appendChild(row);
+        });
+    }
+
+    function renderPaginationControls() {
+        if (!paginationControls || !paginationContainer) return;
+        paginationControls.innerHTML = ''; // Clear existing controls
+        const totalPages = Math.ceil(filteredDetections.length / ITEMS_PER_PAGE);
+
+        if (totalPages <= 1) {
+            paginationContainer.classList.add('js-hide-until-load'); // Hide footer if only one page
+            return;
+        }
+        paginationContainer.classList.remove('js-hide-until-load'); // Show footer
+
+        const maxPagesToShow = 5; // Number of page links to show around current page
+        let startPage = Math.max(1, currentPage - Math.floor(maxPagesToShow / 2));
+        let endPage = Math.min(totalPages, startPage + maxPagesToShow - 1);
+
+        // Adjust startPage if endPage reaches the limit first
+        startPage = Math.max(1, endPage - maxPagesToShow + 1);
+
+
+        // Previous Button
+        const prevLi = document.createElement('li');
+        prevLi.classList.add('page-item');
+        if (currentPage === 1) prevLi.classList.add('disabled');
+        prevLi.innerHTML = `<a class="page-link" href="#" data-page="${currentPage - 1}" aria-label="Previous"><span aria-hidden="true">&laquo;</span></a>`;
+        paginationControls.appendChild(prevLi);
+
+        // First Page and Ellipsis
+        if (startPage > 1) {
+            const firstLi = document.createElement('li');
+            firstLi.classList.add('page-item');
+            firstLi.innerHTML = `<a class="page-link" href="#" data-page="1">1</a>`;
+            paginationControls.appendChild(firstLi);
+            if (startPage > 2) {
+                const ellipsisLi = document.createElement('li');
+                ellipsisLi.classList.add('page-item', 'disabled');
+                ellipsisLi.innerHTML = `<span class="page-link">...</span>`;
+                paginationControls.appendChild(ellipsisLi);
+            }
+        }
+
+        // Page Number Buttons
+        for (let i = startPage; i <= endPage; i++) {
+            const pageLi = document.createElement('li');
+            pageLi.classList.add('page-item');
+            if (i === currentPage) pageLi.classList.add('active');
+            pageLi.innerHTML = `<a class="page-link" href="#" data-page="${i}">${i}</a>`;
+            paginationControls.appendChild(pageLi);
+        }
+
+        // Last Page and Ellipsis
+         if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                 const ellipsisLi = document.createElement('li');
+                 ellipsisLi.classList.add('page-item', 'disabled');
+                 ellipsisLi.innerHTML = `<span class="page-link">...</span>`;
+                 paginationControls.appendChild(ellipsisLi);
+            }
+            const lastLi = document.createElement('li');
+            lastLi.classList.add('page-item');
+            lastLi.innerHTML = `<a class="page-link" href="#" data-page="${totalPages}">${totalPages}</a>`;
+            paginationControls.appendChild(lastLi);
+        }
+
+
+        // Next Button
+        const nextLi = document.createElement('li');
+        nextLi.classList.add('page-item');
+        if (currentPage === totalPages) nextLi.classList.add('disabled');
+        nextLi.innerHTML = `<a class="page-link" href="#" data-page="${currentPage + 1}" aria-label="Next"><span aria-hidden="true">&raquo;</span></a>`;
+        paginationControls.appendChild(nextLi);
+
+        // Add event listeners to new controls
+        paginationControls.querySelectorAll('a.page-link').forEach(link => {
+            if (link.closest('.page-item').classList.contains('disabled')) return; // Skip disabled links
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const targetPage = parseInt(link.dataset.page);
+                if (targetPage && targetPage !== currentPage && targetPage >= 1 && targetPage <= totalPages) {
+                    currentPage = targetPage;
+                    renderTablePage();
+                    renderPaginationControls(); // Re-render to update active state/ellipsis
+                    tableContainer.scrollIntoView({ behavior: 'smooth' }); // Scroll to top of table
                 }
+            });
+        });
+    }
+
+    // --- Event Handlers & Logic ---\n
+    function applyFilterAndSort() {
+        const filterText = searchInput ? searchInput.value.toUpperCase().trim() : '';
+
+        // Filter
+        filteredDetections = allDetections.filter(det => {
+            // Ensure det.license_plate exists and is a string before calling toUpperCase
+            return !filterText || (det.license_plate && typeof det.license_plate === 'string' && det.license_plate.toUpperCase().includes(filterText));
+        });
+
+        // Sort
+        const isAscending = currentSortDirection === 'asc';
+        const type = document.querySelector(`th[data-column-key='${currentSortKey}']`)?.dataset.columnType || 'string';
+
+        filteredDetections.sort((a, b) => {
+            let valA = a[currentSortKey];
+            let valB = b[currentSortKey];
+
+            // Handle null/undefined comparison gracefully
+            if (valA == null && valB == null) return 0;
+            if (valA == null) return isAscending ? -1 : 1; // nulls first in asc, last in desc
+            if (valB == null) return isAscending ? 1 : -1; // nulls first in asc, last in desc
+
+
+            let comparison = 0;
+            try {
+                if (type === 'number') {
+                    comparison = (parseFloat(valA) || 0) - (parseFloat(valB) || 0);
+                } else if (type === 'datetime') {
+                     // Attempt to parse dates robustly
+                     const timeA = valA ? new Date(valA).getTime() : 0;
+                     const timeB = valB ? new Date(valB).getTime() : 0;
+                     if (isNaN(timeA) && isNaN(timeB)) comparison = 0;
+                     else if (isNaN(timeA)) comparison = isAscending ? -1 : 1; // Invalid dates treated like null
+                     else if (isNaN(timeB)) comparison = isAscending ? 1 : -1;
+                     else comparison = timeA - timeB;
+                } else { // string comparison (case-insensitive)
+                    comparison = String(valA).localeCompare(String(valB), undefined, { sensitivity: 'base' });
+                }
+            } catch(e) {
+                console.error("Comparison error:", e, "Values:", valA, valB);
+                comparison = 0; // Fallback on error
+            }
+
+            return isAscending ? comparison : -comparison;
+        });
+
+        currentPage = 1; // Reset to first page after filter/sort
+        updateSortIndicators();
+        renderTablePage();
+        renderPaginationControls();
+    }
+
+    function updateSortIndicators() {
+        sortableHeaders.forEach(header => {
+            header.classList.remove('asc', 'desc');
+            if (header.dataset.columnKey === currentSortKey) {
+                header.classList.add(currentSortDirection);
             }
         });
-    } else {
-        console.warn("Could not find search input or table body for filtering.");
-    } 
-    */
-    // --- End Live Plate Search Filter ---
+    }
 
-    // --- Modal Handling for Clickable Rows ---
-    const detectionModal = new bootstrap.Modal(document.getElementById('detectionDetailModal'));
+    // --- Modal Setup (ensure it's done once) ---\n
+    const detectionDetailModalElement = document.getElementById('detectionDetailModal');
+    const detectionModal = detectionDetailModalElement ? new bootstrap.Modal(detectionDetailModalElement) : null;
     const modalTitleCode = document.querySelector('#detectionDetailModalLabel code');
     const modalPlateImage = document.getElementById('modalPlateImage');
     const modalAnnotatedImage = document.getElementById('modalAnnotatedImage');
@@ -363,151 +572,141 @@
     const modalTimeOfDay = document.getElementById('modalTimeOfDay');
     const modalDayOfWeek = document.getElementById('modalDayOfWeek');
 
-    document.querySelectorAll('.clickable-row').forEach(row => {
-        row.addEventListener('click', function() {
-            // Get data from the clicked row's data attributes
-            const plate = this.dataset.plate;
-            const plateImage = this.dataset.plateImage;
-            const annotatedImage = this.dataset.annotatedImage;
-            
-            // Update Modal Title
-            modalTitleCode.textContent = plate;
-            
-            // Update Modal Images (handle cases where image might not exist)
-            modalPlateImage.src = plateImage ? plateImage : '{{ url_for("static", filename="images/placeholder.png") }}'; // Fallback image
-            modalPlateImage.alt = plateImage ? `Cropped Plate: ${plate}` : 'No plate image available';
-            modalAnnotatedImage.src = annotatedImage ? annotatedImage : '{{ url_for("static", filename="images/placeholder.png") }}'; // Fallback image
-            modalAnnotatedImage.alt = annotatedImage ? `Annotated Frame for ${plate}` : 'No annotated frame available';
-            
-            // Update Modal Details
-            modalPlateText.textContent = plate;
-            modalConfidence.textContent = this.dataset.confidence;
-            modalVehicleType.textContent = this.dataset.vehicleType;
-            modalVehicleColor.textContent = this.dataset.vehicleColor;
-            modalFirstSeen.textContent = this.dataset.firstSeen;
-            modalLastSeen.textContent = this.dataset.lastSeen;
-            modalTimeOfDay.textContent = this.dataset.timeOfDay;
-            modalDayOfWeek.textContent = this.dataset.dayOfWeek;
-            
-            // Show the modal
+    function attachModalListener(row) {
+         if (!detectionModal || !row) return; // Don't attach if modal or row doesn't exist
+         row.addEventListener('click', function() {
+            // Safely access data attributes
+            const plate = this.dataset.plate || 'N/A';
+            const plateImage = this.dataset.plateImage || '';
+            const annotatedImage = this.dataset.annotatedImage || ''; // Use the potentially constructed URL
+
+            if (modalTitleCode) modalTitleCode.textContent = plate;
+
+            if (modalPlateImage) {
+                modalPlateImage.src = plateImage || STATIC_PLACEHOLDER_URL;
+                modalPlateImage.alt = plateImage ? `Cropped Plate: ${plate}` : 'No plate image available';
+            }
+             if (modalAnnotatedImage) {
+                 modalAnnotatedImage.src = annotatedImage || STATIC_PLACEHOLDER_URL;
+                 modalAnnotatedImage.alt = annotatedImage && annotatedImage !== STATIC_PLACEHOLDER_URL ? `Annotated Frame for ${plate}` : 'No annotated frame available';
+            }
+
+            if(modalPlateText) modalPlateText.textContent = plate;
+            if(modalConfidence) modalConfidence.textContent = this.dataset.confidence || 'N/A';
+            if(modalVehicleType) modalVehicleType.textContent = this.dataset.vehicleType || 'N/A';
+            if(modalVehicleColor) modalVehicleColor.textContent = this.dataset.vehicleColor || 'N/A';
+            if(modalFirstSeen) modalFirstSeen.textContent = formatDate(this.dataset.firstSeen) || 'N/A';
+            if(modalLastSeen) modalLastSeen.textContent = formatDate(this.dataset.lastSeen) || 'N/A';
+            if(modalTimeOfDay) modalTimeOfDay.textContent = this.dataset.timeOfDay || 'N/A';
+            if(modalDayOfWeek) modalDayOfWeek.textContent = this.dataset.dayOfWeek || 'N/A';
+
             detectionModal.show();
         });
-    });
-    // --- End Modal Handling ---
+    }
 
-    // --- Gallery Modal Handling ---
+    // --- Gallery Modal Handling (existing code - ensure references are correct) ---\n
     const galleryModalElement = document.getElementById('galleryImageModal');
-    const galleryModal = new bootstrap.Modal(galleryModalElement);
+    const galleryModal = galleryModalElement ? new bootstrap.Modal(galleryModalElement) : null;
     const modalGalleryImage = document.getElementById('modalGalleryImage');
-    const modalGalleryTitle = document.getElementById('galleryImageModalLabel'); // Get title element
+    const modalGalleryTitle = document.getElementById('galleryImageModalLabel');
 
-    // Add event listener to the modal element itself for the 'show.bs.modal' event
-    if (galleryModalElement) {
+    if (galleryModalElement && galleryModal) { // Check if modal instance exists
         galleryModalElement.addEventListener('show.bs.modal', function (event) {
-            // Button that triggered the modal
-            const button = event.relatedTarget;
-            // Extract info from data-bs-* attributes (or data-* if easier)
+            const button = event.relatedTarget; // Element that triggered the modal
+             if (!button) return; // Exit if no trigger element
+
             const imgSrc = button.getAttribute('data-img-src');
             const imgAlt = button.getAttribute('data-img-alt');
-            const imgFilename = button.getAttribute('data-img-filename'); // Get filename
+            const imgFilename = button.getAttribute('data-img-filename');
 
-            // Update the modal's content.
             if (modalGalleryImage) {
-                modalGalleryImage.src = imgSrc ? imgSrc : '{{ url_for("static", filename="images/placeholder.png") }}';
-                modalGalleryImage.alt = imgAlt ? imgAlt : 'Annotated Frame';
+                modalGalleryImage.src = imgSrc || STATIC_PLACEHOLDER_URL;
+                modalGalleryImage.alt = imgAlt || 'Annotated Frame';
             }
             if (modalGalleryTitle) {
-                modalGalleryTitle.textContent = imgFilename ? `Annotated Frame: ${imgFilename}` : 'Annotated Frame'; // Update title
+                modalGalleryTitle.textContent = imgFilename ? `Annotated Frame: ${imgFilename}` : 'Annotated Frame';
             }
         });
     } else {
-        console.warn("Gallery modal element not found.");
+        console.warn("Gallery modal element or instance not found.");
     }
-    // --- End Gallery Modal Handling ---
+    // --- End Gallery Modal Handling ---\n
 
-    // --- Table Sorting (REMOVED - Incompatible with server-side pagination) --- 
-    /*
-    const tableBodyForSort = document.getElementById('detections-table-body');
-    const headers = document.querySelectorAll('th.sortable');
-    let currentSortColumn = -1;
-    let currentSortDirection = 'asc'; 
+    // --- Initial Data Load & Event Listeners ---\n
+    document.addEventListener('DOMContentLoaded', () => {
+        // Show loading indicator initially
+        if(loadingIndicator) loadingIndicator.style.display = 'block';
+        if(tableContainer) tableContainer.classList.add('js-hide-until-load');
+        if(paginationContainer) paginationContainer.classList.add('js-hide-until-load');
+        if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
+        if(noDetectionsMessage) noDetectionsMessage.classList.add('js-hide-until-load');
 
-    headers.forEach(header => {
-        header.addEventListener('click', function() {
-            const columnIndex = parseInt(this.dataset.columnIndex);
-            const columnType = this.dataset.columnType || 'string'; 
-
-            // Determine sort direction
-            if (columnIndex === currentSortColumn) {
-                currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
-            } else {
-                currentSortDirection = 'asc';
-                if (currentSortColumn !== -1) {
-                     // Find the correct header in the NodeList (index is columnIndex - 1 if first col isn't sortable)
-                     let headerToRemoveClass = Array.from(headers).find(h => parseInt(h.dataset.columnIndex) === currentSortColumn);
-                     if(headerToRemoveClass) headerToRemoveClass.classList.remove('asc', 'desc');
+        fetch("{{ url_for('api_detections') }}")
+            .then(response => {
+                if (!response.ok) {
+                     return response.text().then(text => { throw new Error(`HTTP error ${response.status}: ${text}`) });
                 }
-            }
+                 // Check content type before parsing JSON
+                 const contentType = response.headers.get("content-type");
+                 if (contentType && contentType.indexOf("application/json") !== -1) {
+                     return response.json();
+                 } else {
+                     return response.text().then(text => { throw new Error(`Expected JSON, got ${contentType}: ${text.substring(0, 100)}...`) });
+                 }
+            })
+            .then(data => {
+                if (data.error) {
+                    throw new Error(`API Error: ${data.error}`);
+                }
+                allDetections = data.detections || [];
+                filteredDetections = [...allDetections]; // Initialize filtered list
 
-            // Update visual indicators
-             headers.forEach(h => h.classList.remove('asc', 'desc')); // Clear all first
-            this.classList.add(currentSortDirection);
-            currentSortColumn = columnIndex;
+                // Update total count stat
+                if(totalDetectionsStat) totalDetectionsStat.textContent = allDetections.length;
 
-            // Sort the table rows
-            sortTable(columnIndex, columnType, currentSortDirection);
+                // Initial render
+                applyFilterAndSort(); // This now renders table and pagination
+
+                // Show table & pagination, hide loading
+                 if(loadingIndicator) loadingIndicator.style.display = 'none';
+                 if(tableContainer) tableContainer.classList.remove('js-hide-until-load');
+                 // Pagination container visibility is handled by renderPaginationControls
+
+            })
+            .catch(error => {
+                console.error('Error fetching or processing detections:', error);
+                if(loadingIndicator) loadingIndicator.style.display = 'none';
+                if(tableErrorPlaceholder) tableErrorPlaceholder.classList.remove('js-hide-until-load');
+                if(tableErrorMessage) tableErrorMessage.textContent = `Failed to load detection data. Please check console and server logs. Error: ${error.message}`;
+            });
+
+        // Add search listener (client-side filtering)
+        if (searchInput) {
+             let filterTimeout = null;
+             searchInput.addEventListener('input', () => { // Use 'input' for better responsiveness
+                 clearTimeout(filterTimeout);
+                 filterTimeout = setTimeout(applyFilterAndSort, 300); // Apply filter after 300ms pause
+             });
+        }
+
+        // Add sort listeners
+        sortableHeaders.forEach(header => {
+            header.addEventListener('click', function() {
+                const columnKey = this.dataset.columnKey;
+                if (!columnKey) return; // Ignore clicks on non-data headers
+
+                if (currentSortKey === columnKey) {
+                    // Toggle direction if same column clicked
+                    currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    // Switch to new column, default to ascending
+                    currentSortKey = columnKey;
+                    currentSortDirection = 'asc';
+                }
+                applyFilterAndSort(); // Re-sort and re-render
+            });
         });
     });
 
-    function sortTable(columnIndex, type, direction) {
-        const rows = Array.from(tableBodyForSort.querySelectorAll('tr'));
-        const isAscending = direction === 'asc';
-
-        rows.sort((rowA, rowB) => {
-            let cellA = rowA.querySelectorAll('td')[columnIndex]?.innerText || '';
-            let cellB = rowB.querySelectorAll('td')[columnIndex]?.innerText || '';
-            
-            if (columnIndex === 3 && type === 'number') { 
-                 const matchA = cellA.match(/([\d\.]+)%/);
-                 const matchB = cellB.match(/([\d\.]+)%/);
-                 cellA = matchA ? parseFloat(matchA[1]) : 0;
-                 cellB = matchB ? parseFloat(matchB[1]) : 0;
-                 type = 'number'; 
-            } 
-            else if (columnIndex === 1) { 
-                 cellA = rowA.querySelectorAll('td')[columnIndex].querySelector('code')?.innerText || '';
-                 cellB = rowB.querySelectorAll('td')[columnIndex].querySelector('code')?.innerText || '';
-            }
-
-            let comparison = 0;
-            if (type === 'number') {
-                const numA = parseFloat(cellA) || 0;
-                const numB = parseFloat(cellB) || 0;
-                comparison = numA - numB;
-            } else if (type === 'datetime') {
-                const dateA = new Date(cellA).getTime() || 0;
-                const dateB = new Date(cellB).getTime() || 0;
-                comparison = dateA - dateB;
-            } else { 
-                comparison = cellA.localeCompare(cellB);
-            }
-
-            return isAscending ? comparison : -comparison;
-        });
-
-        tableBodyForSort.innerHTML = ''; 
-        rows.forEach(row => tableBodyForSort.appendChild(row));
-    }
-    */
-    // --- End Table Sorting ---
-
-    // Optional: Auto-refresh functionality using the /api/detections endpoint
-    /*
-    function fetchAndUpdateDetections() {
-        // ... (existing refresh code, BUT needs update to handle pagination state) ... 
-    }
-    // setInterval(fetchAndUpdateDetections, 30000);
-    // fetchAndUpdateDetections(); 
-    */
 </script>
 {% endblock %} 

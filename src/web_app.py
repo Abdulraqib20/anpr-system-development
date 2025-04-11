@@ -146,7 +146,9 @@ def close_db(error):
 @app.route('/')
 def index():
     """Renders the main page with paginated detections, stats, and image gallery."""
-    logger.info("Request received for index page ('/')")
+    # Get search query parameter
+    search_query = request.args.get('search', '').strip()
+    logger.info(f"Request received for index page ('/'). Search query: '{search_query}'")
     
     # --- Pagination Setup ---
     try:
@@ -175,54 +177,66 @@ def index():
     if conn:
         try:
             with conn.cursor() as cur:
-                # Fetch total detections count first (for pagination)
-                logger.debug("Executing DB query for TOTAL detection count (for pagination).")
-                cur.execute("SELECT COUNT(*) FROM detected_plates")
+                # Base query parts
+                count_query_base = "SELECT COUNT(*) FROM detected_plates"
+                select_query_base = """
+                    SELECT license_plate, start_time, end_time, confidence,
+                           detection_count, vehicle_type, vehicle_color,
+                           time_of_day, day_of_week, image_filename
+                    FROM detected_plates
+                """
+                where_clause = ""
+                query_params = []
+
+                # Add WHERE clause if search query exists
+                if search_query:
+                    # Use ILIKE for case-insensitive matching, add wildcards
+                    where_clause = " WHERE license_plate ILIKE %s"
+                    query_params.append(f"%{search_query}%") 
+                    logger.info(f"Applying search filter: {search_query}")
+
+                # Fetch total FILTERED detections count (for pagination)
+                count_query = count_query_base + where_clause
+                logger.debug(f"Executing DB count query: {count_query} with params: {query_params}")
+                cur.execute(count_query, tuple(query_params)) # Pass params as tuple
                 total_count_result = cur.fetchone()
                 if total_count_result:
                     total_detections = total_count_result[0]
-                    total_pages = math.ceil(total_detections / ITEMS_PER_PAGE)
-                    logger.info(f"Total detections: {total_detections}, Total pages: {total_pages}")
+                    total_pages = math.ceil(total_detections / ITEMS_PER_PAGE) if ITEMS_PER_PAGE > 0 else 1
+                    logger.info(f"Total FILTERED detections: {total_detections}, Total pages: {total_pages}")
                 else:
-                    logger.warning("Could not get total detection count from DB.")
+                    logger.warning("Could not get total filtered detection count from DB.")
                     total_detections = 0
                     total_pages = 1
-                
-                # Adjust page number if it's out of bounds
+
+                # Adjust page number if it's out of bounds after filtering
                 if page > total_pages and total_pages > 0:
                     page = total_pages
                     offset = (page - 1) * ITEMS_PER_PAGE
-                    logger.warning(f"Requested page was too high, adjusted to page {page}")
+                    logger.warning(f"Requested page was too high for filtered results, adjusted to page {page}")
                 elif page < 1:
                      page = 1
                      offset = 0
                      logger.warning(f"Requested page was too low, adjusted to page {page}")
 
-
-                # Fetch PAGINATED detections, including image_filename
-                logger.debug(f"Executing DB query for paginated detections (page {page}).")
-                query = """
-                    SELECT license_plate, start_time, end_time, confidence,
-                           detection_count, vehicle_type, vehicle_color,
-                           time_of_day, day_of_week, image_filename
-                    FROM detected_plates
-                    ORDER BY end_time DESC
-                    LIMIT %s OFFSET %s
-                """
-                cur.execute(query, (ITEMS_PER_PAGE, offset))
+                # Construct final select query with WHERE, ORDER BY, LIMIT, OFFSET
+                select_query = select_query_base + where_clause + " ORDER BY end_time DESC LIMIT %s OFFSET %s"
+                # Add pagination params to existing query params
+                final_params = query_params + [ITEMS_PER_PAGE, offset]
+                logger.debug(f"Executing DB select query: {select_query} with params: {final_params}")
+                cur.execute(select_query, tuple(final_params))
                 colnames = [desc[0] for desc in cur.description]
                 rows = cur.fetchall()
                 detections = [dict(zip(colnames, row)) for row in rows]
-                logger.info(f"Fetched {len(detections)} detections for page {page}.")
+                logger.info(f"Fetched {len(detections)} detections for page {page} with search '{search_query}'.")
 
-                # Fetch detections count for today (stats)
-                logger.debug("Executing DB query for today's detection count.")
-                # Assuming end_time is a TIMESTAMP or TIMESTAMPTZ column
+                # Fetch detections count for today (stats) - This is NOT filtered by search term
+                logger.debug("Executing DB query for today's TOTAL detection count (unfiltered).")
                 cur.execute("SELECT COUNT(*) FROM detected_plates WHERE DATE(end_time) = CURRENT_DATE")
                 today_count_result = cur.fetchone()
                 if today_count_result:
                     stats['today_detections'] = today_count_result[0]
-                    logger.info(f"Today's detections count: {stats['today_detections']}")
+                    logger.info(f"Today's total detections count: {stats['today_detections']}")
 
         except psycopg2.Error as e:
             logger.error(f"Database query error on index page: {e}", exc_info=True)
@@ -296,6 +310,7 @@ def index():
                                total_detections=total_detections,
                                stats=stats,
                                plate_images=plate_images, # Pass gallery data
+                               search_query=search_query, # Pass search query back to template
                                error=error_message)
     except Exception as render_error:
         logger.error(f"Error rendering template 'index.html': {render_error}", exc_info=True)
@@ -304,39 +319,50 @@ def index():
 
 @app.route('/api/detections')
 def api_detections():
-    """Provides detection data as JSON for dynamic updates."""
-    # Use the specific logger
-    logger.info("Request received for API endpoint ('/api/detections')")
+    """Provides ALL detection data as JSON for client-side processing."""
+    logger.info("Request received for API endpoint '/api/detections' (fetching ALL data)")
     conn = get_db()
-    detections = []
+    detections_data = []
     error_message = None
     status_code = 200
 
     if conn:
         try:
             with conn.cursor() as cur:
-                logger.debug("Executing DB query for API.")
-                cur.execute("""
-                    SELECT license_plate, start_time, end_time, confidence, 
-                           detection_count, vehicle_type, vehicle_color, 
-                           time_of_day, day_of_week
+                logger.debug("Executing DB query for ALL detections (for client-side table).")
+                # Select necessary columns for display, sorting, and filtering
+                # IMPORTANT: Only fetch columns needed by the JavaScript
+                sql = """ 
+                    SELECT 
+                        license_plate, 
+                        start_time, 
+                        end_time, 
+                        confidence, 
+                        vehicle_type, 
+                        vehicle_color, 
+                        time_of_day, 
+                        day_of_week, 
+                        image_filename 
                     FROM detected_plates
                     ORDER BY end_time DESC
-                    LIMIT 50
-                """)
+                """ 
+                cur.execute(sql)
                 colnames = [desc[0] for desc in cur.description]
                 rows = cur.fetchall()
-                detections = []
+                
+                # Convert rows to list of dicts, handling datetime objects
                 for row_tuple in rows:
                     row_dict = {}
                     for i, col_name in enumerate(colnames):
                         value = row_tuple[i]
+                        # Convert datetime objects to ISO format strings for JSON compatibility
                         if isinstance(value, datetime):
-                            row_dict[col_name] = value.isoformat()
+                            row_dict[col_name] = value.isoformat() if value else None
                         else:
                             row_dict[col_name] = value
-                    detections.append(row_dict)
-                logger.info(f"Fetched {len(detections)} detections for API.")
+                    detections_data.append(row_dict)
+                
+                logger.info(f"Fetched {len(detections_data)} total detections for API.")
 
         except psycopg2.Error as e:
             logger.error(f"Database query error in API: {e}", exc_info=True)
@@ -351,8 +377,9 @@ def api_detections():
         logger.warning(f"API request failed: {error_message}")
         return jsonify({"error": error_message, "detections": []}), status_code
     else:
-        logger.debug("Returning successful API response.")
-        return jsonify({"detections": detections})
+        logger.debug("Returning successful API response with all detections.")
+        # Return the full dataset
+        return jsonify({"detections": detections_data})
 
 # Route to serve annotated full frame images for the gallery
 @app.route('/output_images/<path:filename>')
