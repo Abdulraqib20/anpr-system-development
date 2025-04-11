@@ -166,15 +166,23 @@
             <div class="row row-cols-2 row-cols-sm-3 row-cols-md-4 row-cols-lg-6 g-3">
                 {% for image in plate_images %}
                 <div class="col">
-                    <div class="card h-100 gallery-card shadow-sm">
-                        <img src="{{ url_for('serve_output_image', filename=image.filename) }}"
-                             class="card-img-top gallery-img"
-                             alt="Annotated Frame: {{ image.plate_text }}"
-                             loading="lazy">
-                        <div class="card-footer text-center small">
-                            <code>{{ image.filename }}</code>
+                    <a href="#" 
+                       data-bs-toggle="modal" 
+                       data-bs-target="#galleryImageModal" 
+                       data-img-src="{{ url_for('serve_output_image', filename=image.filename) }}"
+                       data-img-alt="Annotated Frame: {{ image.filename }}"
+                       data-img-filename="{{ image.filename }}" {# Pass filename for title #}
+                       class="text-decoration-none">
+                        <div class="card h-100 gallery-card shadow-sm">
+                            <img src="{{ url_for('serve_output_image', filename=image.filename) }}"
+                                 class="card-img-top gallery-img"
+                                 alt="Thumbnail: {{ image.filename }}"
+                                 loading="lazy">
+                            <div class="card-footer text-center small">
+                                <code>{{ image.filename }}</code>
+                            </div>
                         </div>
-                    </div>
+                    </a>
                 </div>
                 {% endfor %}
             </div>
@@ -186,7 +194,7 @@
     </div> {# End Card Body #}
 </div> {# End Gallery Card #}
 
-<!-- Detection Details Modal -->
+<!-- Detection Details Modal (for Table Rows) -->
 <div class="modal fade" id="detectionDetailModal" tabindex="-1" aria-labelledby="detectionDetailModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content">
@@ -219,6 +227,21 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Gallery Image Modal -->
+<div class="modal fade" id="galleryImageModal" tabindex="-1" aria-labelledby="galleryImageModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered"> {# Use modal-xl for larger images #}
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="galleryImageModalLabel">Annotated Frame</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center"> {# Center the image #}
+                <img id="modalGalleryImage" src="" alt="Full Annotated Frame" class="img-fluid rounded">
             </div>
         </div>
     </div>
@@ -304,6 +327,36 @@
         });
     });
     // --- End Modal Handling ---
+
+    // --- Gallery Modal Handling ---
+    const galleryModalElement = document.getElementById('galleryImageModal');
+    const galleryModal = new bootstrap.Modal(galleryModalElement);
+    const modalGalleryImage = document.getElementById('modalGalleryImage');
+    const modalGalleryTitle = document.getElementById('galleryImageModalLabel'); // Get title element
+
+    // Add event listener to the modal element itself for the 'show.bs.modal' event
+    if (galleryModalElement) {
+        galleryModalElement.addEventListener('show.bs.modal', function (event) {
+            // Button that triggered the modal
+            const button = event.relatedTarget;
+            // Extract info from data-bs-* attributes (or data-* if easier)
+            const imgSrc = button.getAttribute('data-img-src');
+            const imgAlt = button.getAttribute('data-img-alt');
+            const imgFilename = button.getAttribute('data-img-filename'); // Get filename
+
+            // Update the modal's content.
+            if (modalGalleryImage) {
+                modalGalleryImage.src = imgSrc ? imgSrc : '{{ url_for("static", filename="images/placeholder.png") }}';
+                modalGalleryImage.alt = imgAlt ? imgAlt : 'Annotated Frame';
+            }
+            if (modalGalleryTitle) {
+                modalGalleryTitle.textContent = imgFilename ? `Annotated Frame: ${imgFilename}` : 'Annotated Frame'; // Update title
+            }
+        });
+    } else {
+        console.warn("Gallery modal element not found.");
+    }
+    // --- End Gallery Modal Handling ---
 
     // Optional: Auto-refresh functionality using the /api/detections endpoint
     /*
