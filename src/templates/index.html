@@ -265,7 +265,7 @@
 {% block scripts_extra %}
 <script>
     // --- Configuration ---\n
-    const ITEMS_PER_PAGE = 20; // Items per page for client-side pagination
+    const ITEMS_PER_PAGE = 5; // Items per page for client-side pagination
     const PLATE_IMAGE_URL_BASE = "{{ url_for('serve_plate_image', filename='') }}";
     const ANNOTATED_IMAGE_URL_BASE = "{{ url_for('serve_output_image', filename='') }}";
     const STATIC_PLACEHOLDER_URL = "{{ url_for('static', filename='images/placeholder.png') }}"; // Add a placeholder image
