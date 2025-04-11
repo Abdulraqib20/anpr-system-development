@@ -3,11 +3,12 @@ import sys
 from pathlib import Path
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
-from flask import Flask, render_template, jsonify, g, send_from_directory, abort
+from flask import Flask, render_template, jsonify, g, send_from_directory, abort, request
 from dotenv import load_dotenv
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
+import math
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
@@ -144,13 +145,28 @@ def close_db(error):
 
 @app.route('/')
 def index():
-    """Renders the main page with the latest detections, stats, and image gallery."""
+    """Renders the main page with paginated detections, stats, and image gallery."""
     logger.info("Request received for index page ('/')")
+    
+    # --- Pagination Setup ---
+    try:
+        page = request.args.get('page', 1, type=int) # Get page number from query param, default to 1
+        if page < 1: page = 1
+    except ValueError:
+        page = 1 # Default to page 1 if type conversion fails
+    
+    ITEMS_PER_PAGE = 5 # How many detections per page
+    offset = (page - 1) * ITEMS_PER_PAGE
+    logger.info(f"Requesting page {page}, offset {offset}, items per page {ITEMS_PER_PAGE}")
+    # ------------------------
+    
     conn = get_db()
     detections = []
+    total_detections = 0
+    total_pages = 1
     plate_images = [] # Initialize list for image gallery data
     stats = {
-        'total_detections': 0,
+        #'total_detections': 0, # Will be fetched for pagination
         'today_detections': 0
     }
     error_message = None
@@ -159,30 +175,47 @@ def index():
     if conn:
         try:
             with conn.cursor() as cur:
-                # Fetch recent detections, including image_filename
-                logger.debug("Executing DB query for recent detections.")
-                cur.execute("""
-                    SELECT license_plate, start_time, end_time, confidence, 
-                           detection_count, vehicle_type, vehicle_color, 
-                           time_of_day, day_of_week, image_filename
-                    FROM detected_plates
-                    ORDER BY end_time DESC
-                    LIMIT 50 
-                """)
-                colnames = [desc[0] for desc in cur.description]
-                rows = cur.fetchall()
-                detections = [dict(zip(colnames, row)) for row in rows]
-                logger.info(f"Fetched {len(detections)} recent detections.")
-
-                # Fetch total detections count
-                logger.debug("Executing DB query for total detection count.")
+                # Fetch total detections count first (for pagination)
+                logger.debug("Executing DB query for TOTAL detection count (for pagination).")
                 cur.execute("SELECT COUNT(*) FROM detected_plates")
                 total_count_result = cur.fetchone()
                 if total_count_result:
-                    stats['total_detections'] = total_count_result[0]
-                    logger.info(f"Total detections count: {stats['total_detections']}")
+                    total_detections = total_count_result[0]
+                    total_pages = math.ceil(total_detections / ITEMS_PER_PAGE)
+                    logger.info(f"Total detections: {total_detections}, Total pages: {total_pages}")
+                else:
+                    logger.warning("Could not get total detection count from DB.")
+                    total_detections = 0
+                    total_pages = 1
+                
+                # Adjust page number if it's out of bounds
+                if page > total_pages and total_pages > 0:
+                    page = total_pages
+                    offset = (page - 1) * ITEMS_PER_PAGE
+                    logger.warning(f"Requested page was too high, adjusted to page {page}")
+                elif page < 1:
+                     page = 1
+                     offset = 0
+                     logger.warning(f"Requested page was too low, adjusted to page {page}")
 
-                # Fetch detections count for today
+
+                # Fetch PAGINATED detections, including image_filename
+                logger.debug(f"Executing DB query for paginated detections (page {page}).")
+                query = """
+                    SELECT license_plate, start_time, end_time, confidence,
+                           detection_count, vehicle_type, vehicle_color,
+                           time_of_day, day_of_week, image_filename
+                    FROM detected_plates
+                    ORDER BY end_time DESC
+                    LIMIT %s OFFSET %s
+                """
+                cur.execute(query, (ITEMS_PER_PAGE, offset))
+                colnames = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
+                detections = [dict(zip(colnames, row)) for row in rows]
+                logger.info(f"Fetched {len(detections)} detections for page {page}.")
+
+                # Fetch detections count for today (stats)
                 logger.debug("Executing DB query for today's detection count.")
                 # Assuming end_time is a TIMESTAMP or TIMESTAMPTZ column
                 cur.execute("SELECT COUNT(*) FROM detected_plates WHERE DATE(end_time) = CURRENT_DATE")
@@ -194,13 +227,19 @@ def index():
         except psycopg2.Error as e:
             logger.error(f"Database query error on index page: {e}", exc_info=True)
             error_message = f"Database Error: Could not retrieve data."
-            # Reset stats if DB error occurs after fetching some data
-            stats = {'total_detections': 'Error', 'today_detections': 'Error'}
+            # Reset stats if DB error occurs
+            stats = {'today_detections': 'Error'}
+            total_detections = 'Error'
+            total_pages = 1
+            page = 1
 
     else:
         error_message = "Database connection not available."
         logger.error("Database connection pool not available for index request.")
-        stats = {'total_detections': 'N/A', 'today_detections': 'N/A'}
+        stats = {'today_detections': 'N/A'}
+        total_detections = 'N/A'
+        total_pages = 1
+        page = 1
 
     # --- Fetch Images for Gallery ---
     try:
@@ -247,11 +286,15 @@ def index():
         logger.error(f"Template file not found at expected path: {template_path}")
         return f"Error: Template 'index.html' not found at {template_path}", 500
     
-    logger.debug("Rendering index.html template with detections, stats, and image gallery data.")
+    logger.debug("Rendering index.html template with paginated detections, stats, and image gallery data.")
     try:
         return render_template('index.html', 
-                               detections=detections, 
-                               stats=stats, 
+                               detections=detections,
+                               # Pass pagination variables
+                               current_page=page,
+                               total_pages=total_pages,
+                               total_detections=total_detections,
+                               stats=stats,
                                plate_images=plate_images, # Pass gallery data
                                error=error_message)
     except Exception as render_error:
