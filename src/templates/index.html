@@ -21,6 +21,19 @@
         background-color: rgba(248, 249, 250, 0.8);
         font-weight: 500;
     }
+    /* Style for clickable rows */
+    .clickable-row {
+        cursor: pointer;
+    }
+    .clickable-row:hover {
+        background-color: rgba(0, 0, 0, 0.075); /* Subtle hover effect */
+    }
+    /* Ensure modal images fit nicely */
+    #detectionDetailModal .modal-body img {
+        max-width: 100%;
+        height: auto;
+        margin-bottom: 1rem; /* Space below image */
+    }
 </style>
 {% endblock %}
 
@@ -50,6 +63,10 @@
 <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0"><i class="bi bi-table"></i> Recent Detections</h5>
+        <!-- Search Filter Input -->
+        <div class="col-md-4">
+            <input type="text" id="plateSearchInput" class="form-control form-control-sm" placeholder="Filter by license plate...">
+        </div>
     </div>
     <div class="card-body">
         {% if error and not detections %}
@@ -74,7 +91,17 @@
                     </thead>
                     <tbody id="detections-table-body"> {# Add ID for potential JS updates #}
                         {% for det in detections %}
-                        <tr>
+                        <tr class="clickable-row"
+                            data-plate="{{ det.license_plate }}"
+                            data-last-seen="{{ det.end_time.strftime('%Y-%m-%d %H:%M:%S') if det.end_time else 'N/A' }}"
+                            data-first-seen="{{ det.start_time.strftime('%Y-%m-%d %H:%M:%S') if det.start_time else 'N/A' }}"
+                            data-confidence="{{ '%.1f'|format(det.confidence * 100) if det.confidence is not none else '0.0' }}"
+                            data-vehicle-type="{{ det.vehicle_type | title if det.vehicle_type else 'Unknown' }}"
+                            data-vehicle-color="{{ det.vehicle_color | title if det.vehicle_color else 'Unknown' }}"
+                            data-time-of-day="{{ det.time_of_day | title if det.time_of_day else 'N/A' }}"
+                            data-day-of-week="{{ det.day_of_week if det.day_of_week else 'N/A' }}"
+                            data-plate-image="{{ url_for('serve_plate_image', filename=det.image_filename) if det.image_filename else '' }}"
+                            data-annotated-image="{{ url_for('serve_output_image', filename=det.license_plate + '_' + det.end_time.strftime('%Y%m%d_%H%M%S') + '.jpg') if det.license_plate and det.end_time else '' }}"> {# Construct potential annotated image filename #}
                             <td>
                                 {% if det.image_filename %}
                                     <img src="{{ url_for('serve_plate_image', filename=det.image_filename) }}"
@@ -159,10 +186,125 @@
     </div> {# End Card Body #}
 </div> {# End Gallery Card #}
 
+<!-- Detection Details Modal -->
+<div class="modal fade" id="detectionDetailModal" tabindex="-1" aria-labelledby="detectionDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="detectionDetailModalLabel">Detection Details: <code></code></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Cropped Plate Image</h6>
+                        <img id="modalPlateImage" src="" alt="Cropped Plate Image" class="img-fluid rounded mb-3">
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Annotated Frame (if available)</h6>
+                        <img id="modalAnnotatedImage" src="" alt="Annotated Frame Image" class="img-fluid rounded mb-3">
+                    </div>
+                </div>
+                <h6>Details:</h6>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item"><strong>License Plate:</strong> <span id="modalPlateText"></span></li>
+                    <li class="list-group-item"><strong>Confidence:</strong> <span id="modalConfidence"></span>%</li>
+                    <li class="list-group-item"><strong>Vehicle Type:</strong> <span id="modalVehicleType"></span></li>
+                    <li class="list-group-item"><strong>Vehicle Color:</strong> <span id="modalVehicleColor"></span></li>
+                    <li class="list-group-item"><strong>First Seen:</strong> <span id="modalFirstSeen"></span></li>
+                    <li class="list-group-item"><strong>Last Seen:</strong> <span id="modalLastSeen"></span></li>
+                    <li class="list-group-item"><strong>Time of Day:</strong> <span id="modalTimeOfDay"></span></li>
+                    <li class="list-group-item"><strong>Day of Week:</strong> <span id="modalDayOfWeek"></span></li>
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts_extra %}
 <script>
+    // --- Live Plate Search Filter --- 
+    const searchInput = document.getElementById('plateSearchInput');
+    const tableBody = document.getElementById('detections-table-body');
+    const tableRows = tableBody.getElementsByTagName('tr');
+
+    if (searchInput && tableBody && tableRows) {
+        searchInput.addEventListener('keyup', function() {
+            const filter = searchInput.value.toUpperCase();
+
+            for (let i = 0; i < tableRows.length; i++) {
+                // Find the cell containing the license plate (assuming it's the second column, index 1)
+                // And it contains a <code> tag
+                let plateCell = tableRows[i].getElementsByTagName('td')[1]; // Adjust index if plate column changes
+                if (plateCell) {
+                    let plateTextElement = plateCell.getElementsByTagName('code')[0];
+                    if (plateTextElement) {
+                        let plateText = plateTextElement.textContent || plateTextElement.innerText;
+                        if (plateText.toUpperCase().indexOf(filter) > -1) {
+                            tableRows[i].style.display = ""; // Show row
+                        } else {
+                            tableRows[i].style.display = "none"; // Hide row
+                        }
+                    }
+                }
+            }
+        });
+    } else {
+        console.warn("Could not find search input or table body for filtering.");
+    }
+    // --- End Live Plate Search Filter ---
+
+    // --- Modal Handling for Clickable Rows ---
+    const detectionModal = new bootstrap.Modal(document.getElementById('detectionDetailModal'));
+    const modalTitleCode = document.querySelector('#detectionDetailModalLabel code');
+    const modalPlateImage = document.getElementById('modalPlateImage');
+    const modalAnnotatedImage = document.getElementById('modalAnnotatedImage');
+    const modalPlateText = document.getElementById('modalPlateText');
+    const modalConfidence = document.getElementById('modalConfidence');
+    const modalVehicleType = document.getElementById('modalVehicleType');
+    const modalVehicleColor = document.getElementById('modalVehicleColor');
+    const modalFirstSeen = document.getElementById('modalFirstSeen');
+    const modalLastSeen = document.getElementById('modalLastSeen');
+    const modalTimeOfDay = document.getElementById('modalTimeOfDay');
+    const modalDayOfWeek = document.getElementById('modalDayOfWeek');
+
+    document.querySelectorAll('.clickable-row').forEach(row => {
+        row.addEventListener('click', function() {
+            // Get data from the clicked row's data attributes
+            const plate = this.dataset.plate;
+            const plateImage = this.dataset.plateImage;
+            const annotatedImage = this.dataset.annotatedImage;
+            
+            // Update Modal Title
+            modalTitleCode.textContent = plate;
+            
+            // Update Modal Images (handle cases where image might not exist)
+            modalPlateImage.src = plateImage ? plateImage : '{{ url_for("static", filename="images/placeholder.png") }}'; // Fallback image
+            modalPlateImage.alt = plateImage ? `Cropped Plate: ${plate}` : 'No plate image available';
+            modalAnnotatedImage.src = annotatedImage ? annotatedImage : '{{ url_for("static", filename="images/placeholder.png") }}'; // Fallback image
+            modalAnnotatedImage.alt = annotatedImage ? `Annotated Frame for ${plate}` : 'No annotated frame available';
+            
+            // Update Modal Details
+            modalPlateText.textContent = plate;
+            modalConfidence.textContent = this.dataset.confidence;
+            modalVehicleType.textContent = this.dataset.vehicleType;
+            modalVehicleColor.textContent = this.dataset.vehicleColor;
+            modalFirstSeen.textContent = this.dataset.firstSeen;
+            modalLastSeen.textContent = this.dataset.lastSeen;
+            modalTimeOfDay.textContent = this.dataset.timeOfDay;
+            modalDayOfWeek.textContent = this.dataset.dayOfWeek;
+            
+            // Show the modal
+            detectionModal.show();
+        });
+    });
+    // --- End Modal Handling ---
+
     // Optional: Auto-refresh functionality using the /api/detections endpoint
     /*
     function fetchAndUpdateDetections() {
