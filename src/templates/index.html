@@ -281,7 +281,7 @@
                         <img id="modalPlateImage" src="" alt="Cropped Plate Image" class="img-fluid rounded">
                     </div>
                     <div class="col-md-6">
-                        <h6>Annotated Frame (if available)</h6>
+                        <h6>Annotated Frame</h6>
                         <img id="modalAnnotatedImage" src="" alt="Annotated Frame Image" class="img-fluid rounded">
                     </div>
                 </div>
@@ -426,23 +426,10 @@
                       style="max-height: 40px; width: auto;" loading="lazy">` :
                 `<i class="bi bi-image-alt text-muted" title="No image available"></i>`;
 
-            // Try to construct annotated image filename (requires consistent naming)
-            // Example: PLATE_YYYYMMDD_HHMMSS.jpg
-            let annotatedImageUrl = '';
-            if (det.license_plate && det.end_time) {
-                 try {
-                    const dt = new Date(det.end_time);
-                    const timestamp = dt.toISOString().replace(/[:T.-]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
-                    // PROBLEM: Microseconds/exact timestamp might differ from filename saved by Python script
-                    // For now, link to placeholder or leave empty if constructing is unreliable
-                    // A better solution is to save the *exact* annotated filename in the DB
-                    annotatedImageUrl = STATIC_PLACEHOLDER_URL; // Fallback until DB stores exact filename
-                 } catch (e) { /* ignore date parsing error */ }
-            }
-
-
+            // Define the row element *before* using it
             const row = document.createElement('tr');
             row.classList.add('clickable-row');
+
             // Add data attributes for the modal
             row.dataset.plate = det.license_plate || '';
             row.dataset.lastSeen = det.end_time || 'N/A';
@@ -453,7 +440,8 @@
             row.dataset.timeOfDay = formatTitle(det.time_of_day);
             row.dataset.dayOfWeek = det.day_of_week || 'N/A';
             row.dataset.plateImage = det.image_filename ? `${PLATE_IMAGE_URL_BASE}${det.image_filename}` : '';
-            row.dataset.annotatedImage = annotatedImageUrl; // Use constructed or placeholder URL
+            // Use the new field directly if available, otherwise keep the placeholder
+            row.dataset.annotatedImage = det.annotated_frame_filename ? `${ANNOTATED_IMAGE_URL_BASE}${det.annotated_frame_filename}` : STATIC_PLACEHOLDER_URL;
 
             row.innerHTML = `
                 <td>${plateImgHtml}</td>

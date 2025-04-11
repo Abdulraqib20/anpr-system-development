@@ -172,19 +172,20 @@ class ImageProcessor:
         return self.image.copy() if self.image is not None else None
 
     def save_image(self, image, output_path=None):
-        """Saves the processed image"""
+        """Saves the processed image and returns the filename if successful."""
         path_to_save = output_path if output_path else self.output_path
         try:
             success = cv2.imwrite(str(path_to_save), image)
             if success:
+                filename = Path(path_to_save).name
                 logger.info(f"Processed image saved to: {path_to_save}")
-                return True
+                return filename # Return filename on success
             else:
                 logger.warning(f"Failed to save image to: {path_to_save}")
-                return False
+                return None
         except Exception as e:
             logger.error(f"Error saving image {path_to_save}: {e}", exc_info=True)
-            return False
+            return None
 
 
 #-------------------------------------------------------------------------------
@@ -542,8 +543,14 @@ class ANPRProcessor:
     #---------------------------------------------------------------------------------------------
     # Save to Database
     #---------------------------------------------------------------------------------------------
-    def save_to_database(self, detections):
-        """Consolidates plates and saves valid ones to the database."""
+    def save_to_database(self, detections, annotated_frame_filename=None):
+        """Consolidates plates and saves valid ones to the database.
+        
+        Args:
+            detections (list or dict): List or dictionary of detection data.
+            annotated_frame_filename (str, optional): The filename of the saved annotated frame image.
+                                                      Defaults to None.
+        """
         if not detections:
             logger.info("No plates to save.")
             return
@@ -635,7 +642,8 @@ class ANPRProcessor:
                             data['vehicle_color'],
                             time_details.get('time_of_day'),
                             time_details.get('day_of_week'),
-                            data.get('image_filename')
+                            data.get('image_filename'),
+                            annotated_frame_filename
                         )
                     )
 
@@ -659,12 +667,13 @@ class ANPRProcessor:
 
                     logger.info(f"Inserting {len(final_unique_records)} unique records into DB.")
                     
-                    # Modified SQL - Remove ON CONFLICT clause to allow duplicates at different times
+                    # Modified SQL - Add the new column
                     sql_insert = """
                         INSERT INTO detected_plates
                         (start_time, end_time, license_plate, confidence, detection_count, 
-                         vehicle_type, vehicle_color, time_of_day, day_of_week, image_filename)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         vehicle_type, vehicle_color, time_of_day, day_of_week, image_filename,
+                         annotated_frame_filename)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """
                     # No ON CONFLICT clause to allow duplicates at different times
                     
@@ -816,14 +825,14 @@ class ANPRProcessor:
             # Process the single image - Updated call site
             annotated_image, detections = self.process_image(image) # Get detections back
 
-            # Save the annotated image
-            img_processor.save_image(annotated_image)
+            # Save the annotated image and get its filename
+            saved_annotated_filename = img_processor.save_image(annotated_image)
 
             # --- Trigger Database Save ---
             if detections:
-                logger.info(f"--- Triggering Database Save for {len(detections)} detections ---")
-                # Pass detections directly to save_to_database (will modify this function next)
-                self.save_to_database(detections)
+                logger.info(f"--- Triggering Database Save for {len(detections)} detections (Annotated Frame: {saved_annotated_filename or 'Not Saved'}) ---")
+                # Pass detections AND the saved annotated filename to save_to_database
+                self.save_to_database(detections, annotated_frame_filename=saved_annotated_filename)
             else:
                 logger.info("No valid plates detected in the image to save.")
 

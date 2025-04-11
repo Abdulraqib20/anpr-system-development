@@ -342,7 +342,8 @@ def api_detections():
                         vehicle_color, 
                         time_of_day, 
                         day_of_week, 
-                        image_filename 
+                        image_filename,
+                        annotated_frame_filename
                     FROM detected_plates
                     ORDER BY end_time DESC
                 """ 
