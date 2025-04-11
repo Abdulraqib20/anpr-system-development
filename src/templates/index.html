@@ -104,6 +104,66 @@
         </div>
     </div>
     <div class="card-body">
+        {# --- Enhanced Filter Controls --- #}
+        <div class="row mb-3 gx-2 gy-2">
+            <div class="col-md-3">
+                <label for="filterVehicleType" class="form-label small mb-1">Vehicle Type</label>
+                <select id="filterVehicleType" class="form-select form-select-sm">
+                    <option value="">All Types</option>
+                    <option value="Car">Car</option>
+                    <option value="Truck">Truck</option>
+                    <option value="Motorcycle">Motorcycle</option>
+                    <option value="Bus">Bus</option>
+                    <option value="Van">Van</option>
+                    <option value="Unknown">Unknown</option>
+                    {# Add more common types if needed #}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="filterVehicleColor" class="form-label small mb-1">Vehicle Color</label>
+                <select id="filterVehicleColor" class="form-select form-select-sm">
+                    <option value="">All Colors</option>
+                    <option value="Black">Black</option>
+                    <option value="White">White</option>
+                    <option value="Grey">Grey</option>
+                    <option value="Silver">Silver</option>
+                    <option value="Red">Red</option>
+                    <option value="Blue">Blue</option>
+                    <option value="Green">Green</option>
+                    <option value="Yellow">Yellow</option>
+                    <option value="Brown">Brown</option>
+                    <option value="Beige">Beige</option>
+                    <option value="Orange">Orange</option>
+                     <option value="Purple">Purple</option>
+                    <option value="Unknown">Unknown</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="filterTimeOfDay" class="form-label small mb-1">Time of Day</label>
+                <select id="filterTimeOfDay" class="form-select form-select-sm">
+                    <option value="">All Times</option>
+                    <option value="Morning">Morning</option>
+                    <option value="Afternoon">Afternoon</option>
+                    <option value="Evening">Evening</option>
+                    <option value="Night">Night</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="filterDayOfWeek" class="form-label small mb-1">Day of Week</label>
+                <select id="filterDayOfWeek" class="form-select form-select-sm">
+                    <option value="">All Days</option>
+                    <option value="Monday">Monday</option>
+                    <option value="Tuesday">Tuesday</option>
+                    <option value="Wednesday">Wednesday</option>
+                    <option value="Thursday">Thursday</option>
+                    <option value="Friday">Friday</option>
+                    <option value="Saturday">Saturday</option>
+                    <option value="Sunday">Sunday</option>
+                </select>
+            </div>
+        </div>
+        {# --- End Enhanced Filter Controls --- #}
+
         {# Loading indicator #}
         <div id="loadingIndicator">
             <div class="spinner-border spinner-border-sm text-primary" role="status">
@@ -289,6 +349,10 @@
     const totalDetectionsStat = document.getElementById('totalDetectionsStat');
     const sortableHeaders = document.querySelectorAll('th.sortable');
     const paginationContainer = document.getElementById('paginationContainer');
+    const filterVehicleType = document.getElementById('filterVehicleType'); // New filter
+    const filterVehicleColor = document.getElementById('filterVehicleColor'); // New filter
+    const filterTimeOfDay = document.getElementById('filterTimeOfDay'); // New filter
+    const filterDayOfWeek = document.getElementById('filterDayOfWeek'); // New filter
 
     // --- Utility Functions ---\n
     function formatDate(isoString) {
@@ -495,14 +559,25 @@
         });
     }
 
-    // --- Event Handlers & Logic ---\n
+    // --- Event Handlers & Logic ---
+
     function applyFilterAndSort() {
+        // Get filter values
         const filterText = searchInput ? searchInput.value.toUpperCase().trim() : '';
+        const selectedType = filterVehicleType ? filterVehicleType.value : '';
+        const selectedColor = filterVehicleColor ? filterVehicleColor.value : '';
+        const selectedTime = filterTimeOfDay ? filterTimeOfDay.value : '';
+        const selectedDay = filterDayOfWeek ? filterDayOfWeek.value : '';
 
         // Filter
         filteredDetections = allDetections.filter(det => {
-            // Ensure det.license_plate exists and is a string before calling toUpperCase
-            return !filterText || (det.license_plate && typeof det.license_plate === 'string' && det.license_plate.toUpperCase().includes(filterText));
+            const plateMatch = !filterText || (det.license_plate && typeof det.license_plate === 'string' && det.license_plate.toUpperCase().includes(filterText));
+            const typeMatch = !selectedType || (det.vehicle_type && det.vehicle_type.toLowerCase() === selectedType.toLowerCase());
+            const colorMatch = !selectedColor || (det.vehicle_color && det.vehicle_color.toLowerCase() === selectedColor.toLowerCase());
+            const timeMatch = !selectedTime || (det.time_of_day && det.time_of_day.toLowerCase() === selectedTime.toLowerCase());
+            const dayMatch = !selectedDay || (det.day_of_week && det.day_of_week.toLowerCase() === selectedDay.toLowerCase());
+
+            return plateMatch && typeMatch && colorMatch && timeMatch && dayMatch;
         });
 
         // Sort
@@ -688,6 +763,13 @@
                  filterTimeout = setTimeout(applyFilterAndSort, 300); // Apply filter after 300ms pause
              });
         }
+
+        // Add change listeners for new filter dropdowns
+        [filterVehicleType, filterVehicleColor, filterTimeOfDay, filterDayOfWeek].forEach(selectElement => {
+            if (selectElement) {
+                selectElement.addEventListener('change', applyFilterAndSort);
+            }
+        });
 
         // Add sort listeners
         sortableHeaders.forEach(header => {
