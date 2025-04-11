@@ -34,6 +34,25 @@
         height: auto;
         margin-bottom: 1rem; /* Space below image */
     }
+    /* Sorting indicator styles */
+    .sortable {
+        cursor: pointer;
+        position: relative;
+    }
+    .sortable::after {
+        content: '\2195'; /* Up-Down Arrow */
+        position: absolute;
+        right: 8px;
+        opacity: 0.3;
+    }
+    .sortable.asc::after {
+        content: '\2191'; /* Up Arrow */
+        opacity: 1;
+    }
+    .sortable.desc::after {
+        content: '\2193'; /* Down Arrow */
+        opacity: 1;
+    }
 </style>
 {% endblock %}
 
@@ -79,14 +98,14 @@
                     <thead class="table-dark">
                         <tr>
                             <th><i class="bi bi-card-image"></i> Image</th>
-                            <th><i class="bi bi-person-badge"></i> Plate</th>
-                            <th><i class="bi bi-clock-history"></i> Last Seen</th>
-                            <th><i class="bi bi-check-circle"></i> Confidence</th>
-                            <th><i class="bi bi-truck-front"></i> Vehicle</th>
-                            <th><i class="bi bi-palette"></i> Color</th>
-                            <th><i class="bi bi-clock"></i> Time</th>
-                            <th><i class="bi bi-calendar-week"></i> Day</th>
-                            <th><i class="bi bi-clock-history"></i> First Seen</th>
+                            <th class="sortable" data-column-index="1" data-column-type="string"><i class="bi bi-person-badge"></i> Plate</th>
+                            <th class="sortable" data-column-index="2" data-column-type="datetime"><i class="bi bi-clock-history"></i> Last Seen</th>
+                            <th class="sortable" data-column-index="3" data-column-type="number"><i class="bi bi-check-circle"></i> Confidence</th>
+                            <th class="sortable" data-column-index="4" data-column-type="string"><i class="bi bi-truck-front"></i> Vehicle</th>
+                            <th class="sortable" data-column-index="5" data-column-type="string"><i class="bi bi-palette"></i> Color</th>
+                            <th class="sortable" data-column-index="6" data-column-type="string"><i class="bi bi-clock"></i> Time</th>
+                            <th class="sortable" data-column-index="7" data-column-type="string"><i class="bi bi-calendar-week"></i> Day</th>
+                            <th class="sortable" data-column-index="8" data-column-type="datetime"><i class="bi bi-clock-history"></i> First Seen</th>
                         </tr>
                     </thead>
                     <tbody id="detections-table-body"> {# Add ID for potential JS updates #}
@@ -357,6 +376,83 @@
         console.warn("Gallery modal element not found.");
     }
     // --- End Gallery Modal Handling ---
+
+    // --- Table Sorting --- 
+    const tableBodyForSort = document.getElementById('detections-table-body');
+    const headers = document.querySelectorAll('th.sortable');
+    let currentSortColumn = -1;
+    let currentSortDirection = 'asc'; // 'asc' or 'desc'
+
+    headers.forEach(header => {
+        header.addEventListener('click', function() {
+            const columnIndex = parseInt(this.dataset.columnIndex);
+            const columnType = this.dataset.columnType || 'string'; // Default to string
+
+            // Determine sort direction
+            if (columnIndex === currentSortColumn) {
+                currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSortDirection = 'asc';
+                // Remove sorting classes from previous column
+                if (currentSortColumn !== -1) {
+                    headers[currentSortColumn -1].classList.remove('asc', 'desc'); // Adjust index for headers NodeList
+                }
+            }
+
+            // Update visual indicators
+            this.classList.remove('asc', 'desc');
+            this.classList.add(currentSortDirection);
+            currentSortColumn = columnIndex;
+
+            // Sort the table rows
+            sortTable(columnIndex, columnType, currentSortDirection);
+        });
+    });
+
+    function sortTable(columnIndex, type, direction) {
+        const rows = Array.from(tableBodyForSort.querySelectorAll('tr'));
+        const isAscending = direction === 'asc';
+
+        rows.sort((rowA, rowB) => {
+            let cellA = rowA.querySelectorAll('td')[columnIndex]?.innerText || '';
+            let cellB = rowB.querySelectorAll('td')[columnIndex]?.innerText || '';
+            
+            // Special handling for confidence (extract number from progress bar text)
+            if (columnIndex === 3 && type === 'number') { 
+                 const matchA = cellA.match(/([\d\.]+)%/);
+                 const matchB = cellB.match(/([\d\.]+)%/);
+                 cellA = matchA ? parseFloat(matchA[1]) : 0;
+                 cellB = matchB ? parseFloat(matchB[1]) : 0;
+                 type = 'number'; // Ensure type is number for comparison
+            } 
+            // Special handling for plate (remove <code> tags)
+            else if (columnIndex === 1) { 
+                 cellA = rowA.querySelectorAll('td')[columnIndex].querySelector('code')?.innerText || '';
+                 cellB = rowB.querySelectorAll('td')[columnIndex].querySelector('code')?.innerText || '';
+            }
+
+            // Comparison logic based on type
+            let comparison = 0;
+            if (type === 'number') {
+                const numA = parseFloat(cellA) || 0;
+                const numB = parseFloat(cellB) || 0;
+                comparison = numA - numB;
+            } else if (type === 'datetime') {
+                const dateA = new Date(cellA).getTime() || 0;
+                const dateB = new Date(cellB).getTime() || 0;
+                comparison = dateA - dateB;
+            } else { // Default to string comparison
+                comparison = cellA.localeCompare(cellB);
+            }
+
+            return isAscending ? comparison : -comparison;
+        });
+
+        // Re-append rows in sorted order
+        tableBodyForSort.innerHTML = ''; // Clear existing rows
+        rows.forEach(row => tableBodyForSort.appendChild(row));
+    }
+    // --- End Table Sorting ---
 
     // Optional: Auto-refresh functionality using the /api/detections endpoint
     /*
