@@ -26,10 +26,12 @@ try:
     root_dir = Path(__file__).parent.parent.resolve()
     env_path = root_dir / '.env'
     
-    if not env_path.exists():
-        logger.critical(f"Missing .env file at {env_path}")
-        sys.exit(1)
+    # Check for .env existence (optional for deployment, useful locally)
+    # if not env_path.exists():
+    #     logger.warning(f"No .env file found at {env_path}. Relying solely on system environment variables.")
+        # sys.exit(1) # DO NOT EXIT IN DEPLOYMENT IF FILE IS MISSING
 
+    # Attempt to load .env if it exists. If not, it will do nothing.
     load_dotenv(env_path)
 
     # Required environment variables
