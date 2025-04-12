@@ -5,12 +5,17 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Define log directory path
+LOGS_DIR = Path(__file__).parent.parent / 'logs'
+# Create logs directory if it doesn't exist
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
 # Configure logging before other imports
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(Path(__file__).parent.parent / 'logs/config.log'),
+        logging.FileHandler(LOGS_DIR / 'config.log'),
         logging.StreamHandler()
     ]
 )
