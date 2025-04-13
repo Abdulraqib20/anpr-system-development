@@ -232,7 +232,49 @@ class ANPRProcessor:
             port=DB_PORT,
             connect_timeout=5
         )
+
+        # --- Ensure Database Table Exists --- Start
+        self._ensure_table_exists()
+        # --- Ensure Database Table Exists --- End
+
         logger.info("ANPRProcessor initialized for image processing with Groq Meta's Llama-3.1 Vision Model.")
+    
+    #----------------------------------------------------------------------------------------------
+    # Helper: Ensure Database Table Exists
+    #----------------------------------------------------------------------------------------------
+    def _ensure_table_exists(self):
+        """Creates the detected_plates table if it doesn't exist."""
+        conn = None
+        try:
+            conn = self.db_pool.getconn()
+            with conn.cursor() as cursor:
+                # Define table schema
+                create_table_sql = """
+                CREATE TABLE IF NOT EXISTS detected_plates (
+                    id SERIAL PRIMARY KEY,
+                    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                    end_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                    license_plate VARCHAR(20) NOT NULL,
+                    confidence REAL, -- Using REAL for floating point
+                    detection_count INTEGER,
+                    vehicle_type VARCHAR(50),
+                    vehicle_color VARCHAR(50),
+                    time_of_day VARCHAR(20),
+                    day_of_week VARCHAR(20),
+                    image_filename VARCHAR(255), -- Path to the cropped plate image
+                    annotated_frame_filename VARCHAR(255) -- Path to the full annotated frame
+                );
+                """
+                cursor.execute(create_table_sql)
+                conn.commit()
+                logger.info("Table 'detected_plates' checked/created successfully.")
+        except Exception as e:
+            logger.error(f"Database error during table creation: {e}", exc_info=True)
+            if conn:
+                conn.rollback() # Rollback in case of partial creation failure
+        finally:
+            if conn:
+                self.db_pool.putconn(conn)
     
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Type
