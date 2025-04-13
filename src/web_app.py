@@ -3,12 +3,17 @@ import sys
 from pathlib import Path
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
-from flask import Flask, render_template, jsonify, g, send_from_directory, abort, request
+from flask import Flask, render_template, jsonify, g, send_from_directory, abort, request, flash
+from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 import math
+import traceback
+
+# Import ANPRProcessor
+from anpr_image import ANPRProcessor
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
@@ -30,9 +35,13 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 OUTPUT_DIR = PROJECT_ROOT / "output_plates"
 # Directory for cropped plate images (referenced in DB, served by serve_plate_image)
 PLATE_IMAGE_DIR = OUTPUT_DIR / "plate_images"
+# Directory for temporary uploads
+UPLOADS_DIR = PROJECT_ROOT / "uploads"
+
 # Ensure the directories exist (optional here, as anpr_image should create them)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Logging Setup ---
 LOGS_DIR = PROJECT_ROOT / "logs"
@@ -76,6 +85,7 @@ logger.info("Werkzeug logger configured to use web app handlers and disable prop
 
 logger.info("--- ANPR Web App Starting --- ")
 logger.info(f"Logging configured. Log file: {LOG_FILE_PATH}")
+logger.info(f"Uploads directory: {UPLOADS_DIR}")
 
 logger.info(f"DB Config: Host={DB_HOST}, DB={DB_NAME}, User={DB_USER}, Port={DB_PORT}")
 
@@ -117,6 +127,16 @@ if not STATIC_DIR.is_dir():
 # Explicit is clearer:
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 
+# Configure a secret key for flashing messages (optional but good practice)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_secret_key_for_dev')
+
+# Configure allowed extensions for upload
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp'}
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 # Helper function to get a connection from the pool
 def get_db():
     # Use the specific logger
@@ -140,6 +160,16 @@ def close_db(error):
     if error:
         # Log the error passed from Flask during teardown
         logger.error(f"App context teardown error: {error}", exc_info=True)
+
+# --- Initialize ANPR Processor ---
+anpr_processor = None
+try:
+    # Instantiate it once when the app starts
+    anpr_processor = ANPRProcessor()
+    logger.info("ANPRProcessor initialized successfully.")
+except Exception as e:
+    logger.error(f"CRITICAL: Failed to initialize ANPRProcessor: {e}", exc_info=True)
+    # The app might still run but uploads will fail. Consider if app should exit.
 
 # --- Routes ---
 
@@ -431,10 +461,75 @@ def serve_plate_image(filename):
         logger.error(f"Error serving CROPPED plate image {filename}: {e}", exc_info=True)
         abort(500)
 
+# --- Upload Route ---
+@app.route('/upload', methods=['POST'])
+def upload_image():
+    global anpr_processor # Access the globally initialized processor
+    logger.info("Received request for image upload endpoint (/upload).")
+
+    if not anpr_processor:
+        logger.error("ANPRProcessor not initialized, cannot process upload.")
+        return jsonify({"success": False, "error": "ANPR system is not ready."}), 500
+
+    if 'imageFile' not in request.files:
+        logger.warning("No 'imageFile' part in the request files.")
+        return jsonify({"success": False, "error": "No file part in the request."}), 400
+
+    file = request.files['imageFile']
+
+    if file.filename == '':
+        logger.warning("No file selected for upload.")
+        return jsonify({"success": False, "error": "No selected file."}), 400
+
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        # Add timestamp to avoid filename collisions
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        unique_filename = f"{timestamp}_{filename}"
+        temp_save_path = UPLOADS_DIR / unique_filename
+        logger.info(f"Processing uploaded file: {filename} -> {unique_filename}")
+
+        try:
+            # Save the file temporarily
+            file.save(temp_save_path)
+            logger.info(f"Temporarily saved uploaded file to: {temp_save_path}")
+
+            # --- Call ANPR processing --- #
+            logger.info(f"Starting ANPR processing for: {temp_save_path}")
+            # Use the globally initialized processor
+            anpr_processor.process_image_source(str(temp_save_path))
+            logger.info(f"ANPR processing finished for: {temp_save_path}")
+            # -------------------------- #
+
+            # Return success message
+            message = f"File '{filename}' uploaded and processed successfully."
+            logger.info(message)
+            return jsonify({"success": True, "message": message}), 200
+
+        except Exception as e:
+            # Log detailed error including traceback
+            error_details = traceback.format_exc()
+            logger.error(f"Error processing uploaded file {temp_save_path}: {e}\n{error_details}")
+            return jsonify({"success": False, "error": f"Processing failed: {e}"}), 500
+
+        finally:
+            # --- Clean up temporary file --- #
+            if temp_save_path.exists():
+                try:
+                    os.remove(temp_save_path)
+                    logger.info(f"Removed temporary file: {temp_save_path}")
+                except OSError as e:
+                    logger.error(f"Error removing temporary file {temp_save_path}: {e}")
+            # ------------------------------- #
+    else:
+        logger.warning(f"File type not allowed: {file.filename}")
+        return jsonify({"success": False, "error": "File type not allowed."}), 400
+
 # --- Main Execution ---
 if __name__ == '__main__':
     # Use 0.0.0.0 to make it accessible on your network
-    # Use debug=True only for development (auto-reloads, provides debugger)
-    # For 'production' on the Pi, set debug=False and use a production WSGI server like gunicorn or waitress
-    logger.info("Starting Flask development server.")
-    app.run(host='0.0.0.0', port=5000, debug=True) # Set debug=False for production 
+    # Use debug=True only for development (provides debugger)
+    # Set use_reloader=False to prevent restarts during ANPR processing
+    logger.info("Starting Flask development server (reloader disabled).")
+    # For 'production', set debug=False and use a production WSGI server like waitress
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False) 

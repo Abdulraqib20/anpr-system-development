@@ -66,10 +66,46 @@
     #tableErrorPlaceholder {
          margin-top: 1rem;
     }
+    /* Upload progress styles */
+    #uploadProgress {
+        transition: height 0.3s ease-in-out;
+    }
+    #uploadProgress .progress {
+        height: 10px; /* Smaller progress bar */
+    }
 </style>
 {% endblock %}
 
 {% block content %}
+
+<!-- Image Upload Section -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-upload"></i> Upload Image for ANPR Processing</h5>
+    </div>
+    <div class="card-body">
+        <form id="uploadForm" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label for="imageFile" class="form-label">Select Image File (JPEG, PNG, BMP):</label>
+                <input class="form-control" type="file" id="imageFile" name="imageFile" accept=".jpg, .jpeg, .png, .bmp" required>
+            </div>
+            <button type="submit" id="uploadButton" class="btn btn-primary">
+                <i class="bi bi-cloud-arrow-up-fill"></i> Upload & Process
+            </button>
+            <button type="button" id="cancelUploadButton" class="btn btn-secondary" style="display: none;">
+                <i class="bi bi-x-circle"></i> Cancel
+            </button>
+        </form>
+        <div id="uploadProgress" class="mt-3" style="height: 0; overflow: hidden;">
+            <div class="progress">
+                <div id="uploadProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+            <div id="uploadStatus" class="text-center mt-2 small text-muted"></div>
+        </div>
+         <div id="uploadResult" class="mt-3 alert" style="display: none;" role="alert"></div>
+    </div>
+</div>
+<!-- End Image Upload Section -->
 
 <!-- Dashboard Stats -->
 <div class="row mb-4">
@@ -86,8 +122,8 @@
         <div class="card text-center h-100">
             <div class="card-header">Detections Today</div>
             <div class="card-body d-flex align-items-center justify-content-center">
-                 {# This stat still comes from the initial server load #}
-                <h5 class="card-title display-4 mb-0"><i class="bi bi-calendar-check me-2"></i> {{ stats.today_detections if stats.today_detections is not none else 'N/A' }}</h5>
+                 {# Add an ID to the span for JS updates #}
+                 <h5 class="card-title display-4 mb-0"><i class="bi bi-calendar-check me-2"></i> <span id="todayDetectionsStat">{{ stats.today_detections if stats.today_detections is not none else 'N/A' }}</span></h5>
             </div>
         </div>
     </div>
@@ -331,6 +367,7 @@
     const PLATE_IMAGE_URL_BASE = "{{ url_for('serve_plate_image', filename='') }}";
     const ANNOTATED_IMAGE_URL_BASE = "{{ url_for('serve_output_image', filename='') }}";
     const STATIC_PLACEHOLDER_URL = "{{ url_for('static', filename='images/placeholder.png') }}"; // Add a placeholder image
+    const UPLOAD_URL = "{{ url_for('upload_image') }}"; // URL for the upload endpoint
 
     // --- State Variables ---\n
     let allDetections = []; // Holds the full dataset from the API
@@ -355,6 +392,18 @@
     const filterVehicleColor = document.getElementById('filterVehicleColor'); // New filter
     const filterTimeOfDay = document.getElementById('filterTimeOfDay'); // New filter
     const filterDayOfWeek = document.getElementById('filterDayOfWeek'); // New filter
+    const todayDetectionsStat = document.getElementById('todayDetectionsStat'); // Added reference for today's stat
+
+    // Upload related DOM Elements
+    const uploadForm = document.getElementById('uploadForm');
+    const imageFile = document.getElementById('imageFile');
+    const uploadButton = document.getElementById('uploadButton');
+    const cancelUploadButton = document.getElementById('cancelUploadButton');
+    const uploadProgressContainer = document.getElementById('uploadProgress');
+    const uploadProgressBar = document.getElementById('uploadProgressBar');
+    const uploadStatus = document.getElementById('uploadStatus');
+    const uploadResult = document.getElementById('uploadResult');
+    let currentXhr = null; // To hold the XMLHttpRequest object for cancellation
 
     // --- Utility Functions ---\n
     function formatDate(isoString) {
@@ -698,8 +747,8 @@
     // --- End Gallery Modal Handling ---\n
 
     // --- Data Fetching and Updating ---
-    function fetchAndUpdateData() {
-        console.log("Checking for new detections..."); // Add a log for polling
+    function fetchAndUpdateData(showNotification = false) {
+        console.log("Checking for new detections...");
         // Optional: Add a subtle loading indicator specific to polling?
 
         fetch("{{ url_for('api_detections') }}")
@@ -728,8 +777,27 @@
                     // Update total count stat
                     if(totalDetectionsStat) totalDetectionsStat.textContent = allDetections.length;
 
+                    // --- Calculate and Update Today's Detections --- Start
+                    if (todayDetectionsStat) {
+                        const today = new Date().toISOString().split('T')[0]; // Get YYYY-MM-DD for today
+                        let countToday = 0;
+                        allDetections.forEach(det => {
+                            if (det.end_time && det.end_time.startsWith(today)) {
+                                countToday++;
+                            }
+                        });
+                        todayDetectionsStat.textContent = countToday;
+                        console.log(`Calculated today's detections: ${countToday}`);
+                    }
+                    // --- Calculate and Update Today's Detections --- End
+
                     // Re-apply filters and sorting to the new data and render
-                    applyFilterAndSort(); 
+                    applyFilterAndSort();
+
+                    // Show notification if requested (e.g., after successful upload)
+                    if (showNotification) {
+                        showUploadResult('info', 'Detections table updated.');
+                    }
 
                     // Optional: Show a brief notification that data was updated?
                 } else {
@@ -752,6 +820,129 @@
                     if(tableErrorMessage) tableErrorMessage.textContent = `Failed to fetch updates. Error: ${error.message}`;
                 }
             });
+    }
+
+    // --- Upload Handling ---
+    function showUploadResult(type, message) {
+        uploadResult.className = `alert alert-${type}`; // 'success', 'danger', 'info'
+        uploadResult.textContent = message;
+        uploadResult.style.display = 'block';
+         // Auto-hide after 5 seconds
+         setTimeout(() => {
+             if (uploadResult.style.display === 'block') { // Check if still visible
+                 uploadResult.style.display = 'none';
+             }
+         }, 5000);
+    }
+
+    function resetUploadUI(clearFile = true) {
+        if (clearFile && imageFile) imageFile.value = ''; // Clear the file input
+        if (uploadButton) uploadButton.disabled = false;
+        if (cancelUploadButton) cancelUploadButton.style.display = 'none';
+        if (uploadProgressContainer) uploadProgressContainer.style.height = '0';
+        if (uploadProgressBar) uploadProgressBar.style.width = '0%';
+        if (uploadStatus) uploadStatus.textContent = '';
+         // Keep the result message visible for a while (handled by showUploadResult timeout)
+    }
+
+    function handleUploadSubmit(event) {
+        event.preventDefault();
+        if (!imageFile || !imageFile.files || imageFile.files.length === 0) {
+            showUploadResult('warning', 'Please select an image file first.');
+            return;
+        }
+
+        const file = imageFile.files[0];
+        const formData = new FormData();
+        formData.append('imageFile', file);
+
+        // Show progress UI
+        uploadButton.disabled = true;
+        cancelUploadButton.style.display = 'inline-block'; // Show cancel button
+        uploadResult.style.display = 'none'; // Hide previous result
+        uploadProgressContainer.style.height = 'auto'; // Expand container
+        uploadProgressBar.style.width = '0%';
+        uploadProgressBar.classList.add('progress-bar-animated');
+        uploadStatus.textContent = 'Uploading...';
+
+        currentXhr = new XMLHttpRequest();
+
+        currentXhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const percentComplete = Math.round((e.loaded / e.total) * 100);
+                uploadProgressBar.style.width = percentComplete + '%';
+                 if (percentComplete < 100) {
+                    uploadStatus.textContent = `Uploading... ${percentComplete}%`;
+                 } else {
+                    // --- Enhanced Status Update --- Start
+                    uploadStatus.textContent = 'Upload complete. Processing image...';
+                    // --- Enhanced Status Update --- End
+                    uploadProgressBar.classList.remove('progress-bar-animated');
+                 }
+            }
+        });
+
+        currentXhr.addEventListener('load', () => {
+             // --- Update Status Before Parsing Response --- Start
+             if (uploadStatus) uploadStatus.textContent = 'Processing complete. Analyzing response...';
+             // --- Update Status Before Parsing Response --- End
+
+             if (currentXhr.status >= 200 && currentXhr.status < 300) {
+                try {
+                    const response = JSON.parse(currentXhr.responseText);
+                    if (response.success) {
+                        showUploadResult('success', response.message || 'Image processed successfully. Table will refresh shortly.');
+                        // Trigger data refresh after successful upload
+                        fetchAndUpdateData(true); // Pass true to show update notification
+                    } else {
+                         // Provide more specific error feedback
+                         let errorMsg = `Processing failed: ${response.error || 'Unknown error'}`;
+                         if (response.error && response.error.includes("ANPR system is not ready")) {
+                            errorMsg = "Processing failed: The ANPR system is not ready or encountered an initialization error. Please check server logs.";
+                         } else if (response.error && response.error.includes("File type not allowed")) {
+                            errorMsg = "Processing failed: Invalid file type. Please upload JPEG, PNG, or BMP images.";
+                         }
+                        showUploadResult('danger', errorMsg);
+                    }
+                } catch (parseError) {
+                     console.error("Error parsing upload response:", parseError, "Response text:", currentXhr.responseText);
+                     showUploadResult('danger', 'Error parsing server response. Check console for details.');
+                }
+            } else {
+                 console.error("Upload failed with status:", currentXhr.status, "Response:", currentXhr.responseText);
+                 // Give slightly more context for common errors
+                 let failMsg = `Upload failed: ${currentXhr.statusText || 'Server error'} (Status: ${currentXhr.status})`;
+                 if (currentXhr.status === 500) {
+                     failMsg += ". A server-side error occurred during processing. Check server logs.";
+                 }
+                 showUploadResult('danger', failMsg);
+            }
+            resetUploadUI();
+            currentXhr = null;
+        });
+
+        currentXhr.addEventListener('error', () => {
+            console.error("Upload network error occurred.");
+            showUploadResult('danger', 'Upload failed: Could not connect to the server or network error occurred.');
+            resetUploadUI();
+            currentXhr = null;
+        });
+
+        currentXhr.addEventListener('abort', () => {
+            console.log("Upload cancelled by user.");
+            showUploadResult('warning', 'Upload cancelled.');
+            resetUploadUI();
+            currentXhr = null;
+        });
+
+        currentXhr.open('POST', UPLOAD_URL, true);
+        currentXhr.send(formData);
+    }
+
+    function handleUploadCancel() {
+        if (currentXhr) {
+            currentXhr.abort();
+        }
     }
 
     // --- Initial Data Load & Event Listeners ---
@@ -798,6 +989,22 @@
                 applyFilterAndSort(); // Re-sort and re-render
             });
         });
+
+        // Add upload form listener
+        if (uploadForm) {
+            uploadForm.addEventListener('submit', handleUploadSubmit);
+        }
+        if (cancelUploadButton) {
+            cancelUploadButton.addEventListener('click', handleUploadCancel);
+        }
+        // Optional: Hide upload result message if file input is clicked again
+         if (imageFile) {
+             imageFile.addEventListener('click', () => {
+                 if (uploadResult.style.display === 'block') {
+                     uploadResult.style.display = 'none';
+                 }
+             });
+         }
 
         // Start polling for updates after initial load
         setInterval(fetchAndUpdateData, POLLING_INTERVAL_MS);

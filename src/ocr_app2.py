@@ -66,7 +66,7 @@ if not GROQ_API_KEY:
     logger.error("GROQ_API_KEY not set.")
     st.stop()
 
-GROQ_MODEL_NAME = "llama-3.2-11b-vision-preview"
+GROQ_MODEL_NAME = "llama-3.2-90b-vision-preview" # llama-3.2-11b-vision-preview
 
 try:
     client = Groq(api_key=GROQ_API_KEY)

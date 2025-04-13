@@ -81,7 +81,7 @@ PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 VEHICLE_MODEL_PATH = "models/yolov8n.pt"
 VEHICLE_COLOR_MODEL_PATH = "models/EFN-model.best.h5"
 MODEL_PATH="models/license_plate_detector.pt"
-GROQ_MODEL_NAME = "llama-3.2-11b-vision-preview"
+GROQ_MODEL_NAME = "llama-3.2-90b-vision-preview" # llama-3.2-11b-vision-preview
 
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 MIN_CONFIDENCE=0.45
@@ -417,8 +417,8 @@ class ANPRProcessor:
                         "content": [
                             {
                                 "type": "text",
-                                "text": """STRICTLY identify the license plate in the image. Extract ONLY the alphanumeric characters (A-Z, 0-9) of the license plate number. Ensure the output is in ALL UPPERCASE. REMOVE ALL hyphens, spaces, symbols, or any other non-alphanumeric characters. Respond with ONLY the final cleaned license plate string (e.g., ABC123XY). Do NOT include any introductory text, labels, explanations, or markdown formatting. JUST the cleaned plate string."""
-                             },
+                                "text": "Analyze the license plate image. Extract ONLY the 8 alphanumeric characters (A-Z, 0-9) representing the plate number. Output MUST be exactly 8 characters long and in ALL UPPERCASE. Remove any hyphens, spaces, or symbols. Respond with ONLY the 8-character plate string (e.g., ABC123XY). NO other text, explanation, or formatting."
+                            },
                              {
                                 "type": "image_url",
                                 "image_url": {
@@ -449,21 +449,25 @@ class ANPRProcessor:
     def ocr_license_plate(self, image):
         """Perform OCR on license plate image using Groq Vision."""
         try:
-            # Preprocessing might still be beneficial for Groq, keep it for now
-            processed = self.preprocess_plate(image)
-            
-            # Determine which image to use for OCR
-            if processed is None:
-                logger.warning("Preprocessing failed, attempting Groq OCR on original image.")
-                image_to_ocr = image # Fallback to original image
-            else:
-                logger.debug("Using preprocessed image for Groq OCR.")
-                image_to_ocr = processed
-                # Ensure preprocessed image is suitable for encoding
-                if len(image_to_ocr.shape) == 2: # Check if it's grayscale
-                    image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
-                elif len(image_to_ocr.shape) == 3 and image_to_ocr.shape[2] == 1: # Check if single channel 3D
-                    image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
+            # --- Skip Preprocessing for Groq --- Start
+            # Preprocessing might not be necessary or even detrimental for advanced vision models.
+            # We will send the original cropped image directly.
+            # processed = self.preprocess_plate(image)
+            # if processed is None:
+            #     logger.warning("Preprocessing failed, attempting Groq OCR on original image.")
+            #     image_to_ocr = image # Fallback to original image
+            # else:
+            #     logger.debug("Using preprocessed image for Groq OCR.")
+            #     image_to_ocr = processed
+            #     # Ensure preprocessed image is suitable for encoding
+            #     if len(image_to_ocr.shape) == 2: # Check if it's grayscale
+            #         image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
+            #     elif len(image_to_ocr.shape) == 3 and image_to_ocr.shape[2] == 1: # Check if single channel 3D
+            #         image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
+
+            logger.debug("Sending original cropped plate image to Groq OCR.")
+            image_to_ocr = image # Use the original image
+            # --- Skip Preprocessing for Groq --- End
 
             # Call Groq helper
             cleaned_plate = self._process_plate_with_groq(image_to_ocr)
@@ -553,7 +557,7 @@ class ANPRProcessor:
         """
         if not detections:
             logger.info("No plates to save.")
-            return
+            return False # Return False as nothing was saved
             
         # Convert list to dictionary when needed
         if isinstance(detections, list):
@@ -611,12 +615,13 @@ class ANPRProcessor:
         
         if not filtered_plates:
             logger.warning("All plates filtered out due to validation (color, count, confidence).")
-            return
+            return False # Return False as nothing was saved
         
         # Modified to allow duplicates at different times by removing session-level deduplication
         logger.info(f"Preparing to save {len(filtered_plates)} valid plates to database")
 
         conn = None
+        saved_successfully = False # Flag to track success
         try:
             conn = self.db_pool.getconn()
             conn.autocommit = False  # Explicit transaction control
@@ -663,7 +668,7 @@ class ANPRProcessor:
                             
                     if not final_unique_records:
                         logger.info("No unique records left after final batch deduplication.")
-                        return 
+                        return saved_successfully # Return the success flag
 
                     logger.info(f"Inserting {len(final_unique_records)} unique records into DB.")
                     
@@ -682,14 +687,19 @@ class ANPRProcessor:
                     conn.commit()
                     rows_affected = cursor.rowcount
                     logger.info(f"Database commit successful. Rows affected: {rows_affected}")
+                    if rows_affected > 0:
+                        saved_successfully = True # Set flag if rows were affected
 
         except Exception as e:
             logger.error(f"Database error: {str(e)}")
             if conn:
                 conn.rollback()
+            saved_successfully = False # Ensure flag is false on error
         finally:
             if conn:
                 self.db_pool.putconn(conn)
+            
+        return saved_successfully # Return the success flag
     
     #----------------------------------------------------------------------------------------------
     # Process Image
@@ -822,19 +832,29 @@ class ANPRProcessor:
                 logger.error("Failed to get image from processor.")
                 return # Stop if image loading failed earlier
 
-            # Process the single image - Updated call site
-            annotated_image, detections = self.process_image(image) # Get detections back
+            # Process the single image - Get annotated frame and detections
+            annotated_image, detections = self.process_image(image)
 
-            # Save the annotated image and get its filename
-            saved_annotated_filename = img_processor.save_image(annotated_image)
-
-            # --- Trigger Database Save ---
+            # --- Conditional Save Annotated Frame --- Start
+            saved_annotated_filename = None # Initialize filename
             if detections:
-                logger.info(f"--- Triggering Database Save for {len(detections)} detections (Annotated Frame: {saved_annotated_filename or 'Not Saved'}) ---")
-                # Pass detections AND the saved annotated filename to save_to_database
-                self.save_to_database(detections, annotated_frame_filename=saved_annotated_filename)
+                logger.info(f"--- Triggering Database Save for {len(detections)} potential detections ---")
+                # Call save_to_database and check its return value
+                was_saved_to_db = self.save_to_database(detections) # Don't pass filename yet
+
+                if was_saved_to_db:
+                    logger.info("Database save successful. Now saving annotated frame.")
+                    # Save the annotated image ONLY if DB save was successful
+                    saved_annotated_filename = img_processor.save_image(annotated_image)
+                    if saved_annotated_filename:
+                         logger.info(f"Saved annotated frame: {saved_annotated_filename}")
+                    else:
+                         logger.warning("Failed to save annotated frame even after DB success.")
+                else:
+                    logger.info("No valid detections were saved to the database. Skipping annotated frame save.")
             else:
-                logger.info("No valid plates detected in the image to save.")
+                logger.info("No potential plates detected in the image to attempt saving.")
+            # --- Conditional Save Annotated Frame --- End
 
         except FileNotFoundError as e:
              logger.error(f"Input image file not found: {e}")
