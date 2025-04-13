@@ -877,26 +877,33 @@ class ANPRProcessor:
             # Process the single image - Get annotated frame and detections
             annotated_image, detections = self.process_image(image)
 
-            # --- Conditional Save Annotated Frame --- Start
-            saved_annotated_filename = None # Initialize filename
+            # --- Save Annotated Frame First --- Start
+            saved_annotated_filename = None # Initialize
+            try:
+                # Attempt to save the annotated image regardless of DB success first
+                saved_annotated_filename = img_processor.save_image(annotated_image)
+                if saved_annotated_filename:
+                    logger.info(f"Saved annotated frame: {saved_annotated_filename}")
+                else:
+                    logger.warning("Failed to save annotated frame.")
+            except Exception as img_save_err:
+                 logger.error(f"Error saving annotated frame BEFORE DB attempt: {img_save_err}", exc_info=True)
+            # --- Save Annotated Frame First --- End
+
+            # --- Trigger Database Save (passing the filename) --- Start
             if detections:
-                logger.info(f"--- Triggering Database Save for {len(detections)} potential detections ---")
-                # Call save_to_database and check its return value
-                was_saved_to_db = self.save_to_database(detections) # Don't pass filename yet
+                logger.info(f"--- Triggering Database Save for {len(detections)} potential detections (Annotated Frame: {saved_annotated_filename or 'Not Saved'}) ---")
+                # Call save_to_database, passing the filename we just tried to save
+                was_saved_to_db = self.save_to_database(detections, annotated_frame_filename=saved_annotated_filename)
 
                 if was_saved_to_db:
-                    logger.info("Database save successful. Now saving annotated frame.")
-                    # Save the annotated image ONLY if DB save was successful
-                    saved_annotated_filename = img_processor.save_image(annotated_image)
-                    if saved_annotated_filename:
-                         logger.info(f"Saved annotated frame: {saved_annotated_filename}")
-                    else:
-                         logger.warning("Failed to save annotated frame even after DB success.")
-                else:
-                    logger.info("No valid detections were saved to the database. Skipping annotated frame save.")
+                    logger.info("Database save reported success.")
+                # No need to save image again here, it was attempted above
+                # else:
+                #     logger.info("No valid detections were saved to the database.")
             else:
                 logger.info("No potential plates detected in the image to attempt saving.")
-            # --- Conditional Save Annotated Frame --- End
+            # --- Trigger Database Save (passing the filename) --- End
 
         except FileNotFoundError as e:
              logger.error(f"Input image file not found: {e}")

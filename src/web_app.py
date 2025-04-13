@@ -13,6 +13,7 @@ import math
 import traceback
 
 # Import ANPRProcessor - Use relative import
+# from .anpr_image import ANPRProcessor
 from .anpr_image import ANPRProcessor
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
