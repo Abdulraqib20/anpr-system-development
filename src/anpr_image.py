@@ -81,7 +81,7 @@ PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 VEHICLE_MODEL_PATH = "models/yolov8n.pt"
 VEHICLE_COLOR_MODEL_PATH = "models/EFN-model.best.h5"
 MODEL_PATH="models/license_plate_detector.pt"
-GROQ_MODEL_NAME = "llama-3.2-90b-vision-preview" # llama-3.2-11b-vision-preview
+GROQ_MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct" # "llama-3.2-90b-vision-preview" # llama-3.2-11b-vision-preview
 
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 MIN_CONFIDENCE=0.45
