@@ -237,7 +237,7 @@ class ANPRProcessor:
         self._ensure_table_exists()
         # --- Ensure Database Table Exists --- End
 
-        logger.info("ANPRProcessor initialized for image processing with Groq Meta's Llama-3.1 Vision Model.")
+        logger.info("ANPRProcessor initialized for image processing with Meta's Llama 4 Scout multi-modal model.")
     
     #----------------------------------------------------------------------------------------------
     # Helper: Ensure Database Table Exists
@@ -374,53 +374,53 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Preprocess Plate
     #----------------------------------------------------------------------------------------------  
-    def preprocess_plate(self, image):
-        """Preprocess image for better OCR results using CLAHE and Adaptive Thresholding."""
-        if image is None or image.size == 0:
-            logger.warning("preprocess_plate received an empty image.")
-            return None # Return None if image is invalid
+    # def preprocess_plate(self, image):
+    #     """Preprocess image for better OCR results using CLAHE and Adaptive Thresholding."""
+    #     if image is None or image.size == 0:
+    #         logger.warning("preprocess_plate received an empty image.")
+    #         return None # Return None if image is invalid
         
-        try:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    #     try:
+    #         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             
-            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-            contrast_enhanced_gray = clahe.apply(gray)
-            logger.debug("Applied CLAHE for contrast enhancement.")
+    #         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    #         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    #         contrast_enhanced_gray = clahe.apply(gray)
+    #         logger.debug("Applied CLAHE for contrast enhancement.")
 
-            # Apply Gaussian Blur slightly
-            # blurred = cv2.GaussianBlur(contrast_enhanced_gray, (3, 3), 0)
-            # logger.debug("Applied Gaussian Blur.")
-            # Experiment: Skip blur or use median blur for salt-and-pepper noise
-            blurred = cv2.medianBlur(contrast_enhanced_gray, 3)
-            logger.debug("Applied Median Blur.")
+    #         # Apply Gaussian Blur slightly
+    #         # blurred = cv2.GaussianBlur(contrast_enhanced_gray, (3, 3), 0)
+    #         # logger.debug("Applied Gaussian Blur.")
+    #         # Experiment: Skip blur or use median blur for salt-and-pepper noise
+    #         blurred = cv2.medianBlur(contrast_enhanced_gray, 3)
+    #         logger.debug("Applied Median Blur.")
 
-            # Apply Adaptive Thresholding
-            # Adjust blockSize and C for optimal results
-            # blockSize must be odd
-            # C is a constant subtracted from the mean or weighted sum
-            adaptive_thresh = cv2.adaptiveThreshold(
-                blurred, 
-                255, # Max value
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, # Gaussian weighting for neighborhood
-                cv2.THRESH_BINARY, # Standard binary threshold
-                blockSize=15, # Size of the neighborhood area (must be odd)
-                C=7 # Constant subtracted from the calculated threshold
-            )
-            logger.debug("Applied Adaptive Thresholding.")
+    #         # Apply Adaptive Thresholding
+    #         # Adjust blockSize and C for optimal results
+    #         # blockSize must be odd
+    #         # C is a constant subtracted from the mean or weighted sum
+    #         adaptive_thresh = cv2.adaptiveThreshold(
+    #             blurred, 
+    #             255, # Max value
+    #             cv2.ADAPTIVE_THRESH_GAUSSIAN_C, # Gaussian weighting for neighborhood
+    #             cv2.THRESH_BINARY, # Standard binary threshold
+    #             blockSize=15, # Size of the neighborhood area (must be odd)
+    #             C=7 # Constant subtracted from the calculated threshold
+    #         )
+    #         logger.debug("Applied Adaptive Thresholding.")
             
-            # Optional: Denoising (can be slow, apply if noise is significant)
-            # denoised = cv2.fastNlMeansDenoising(adaptive_thresh, None, h=10, templateWindowSize=7, searchWindowSize=21)
-            # logger.debug("Applied Denoising.")
-            # return denoised
+    #         # Optional: Denoising (can be slow, apply if noise is significant)
+    #         # denoised = cv2.fastNlMeansDenoising(adaptive_thresh, None, h=10, templateWindowSize=7, searchWindowSize=21)
+    #         # logger.debug("Applied Denoising.")
+    #         # return denoised
             
-            return adaptive_thresh
-        except cv2.error as cv_err:
-            logger.error(f"OpenCV error during preprocessing: {cv_err}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error during preprocessing: {e}", exc_info=True)
-            return None
+    #         return adaptive_thresh
+    #     except cv2.error as cv_err:
+    #         logger.error(f"OpenCV error during preprocessing: {cv_err}")
+    #         return None
+    #     except Exception as e:
+    #         logger.error(f"Unexpected error during preprocessing: {e}", exc_info=True)
+    #         return None
     
     #----------------------------------------------------------------------------------------------
     # Helper: Clean Plate Text
@@ -433,7 +433,7 @@ class ANPRProcessor:
         return cleaned
 
     #----------------------------------------------------------------------------------------------
-    # Helper: Process Plate with Groq Meta's Llama-3.1 Vision Model
+    # Helper: Process Plate with Meta's Llama 4 Scout multi-modal model
     #----------------------------------------------------------------------------------------------
     def _process_plate_with_groq(self, plate_image):
         """Encodes plate image and calls Groq Vision API for OCR."""

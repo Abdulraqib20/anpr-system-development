@@ -240,7 +240,7 @@ st.markdown("""
 st.markdown("<div class='main-header'>🚗 License Plate OCR</div>", unsafe_allow_html=True)
 st.markdown("""
 <div class='card'>
-    <p style='text-align: center;'>Extract license plates from images using Llama-3.1 Vision & Tesseract OCR!</p>
+    <p style='text-align: center;'>Extract license plates from images using Meta's Llama 4 Scout multi-modal model & Tesseract OCR!</p>
 </div>
 """, unsafe_allow_html=True)
 
