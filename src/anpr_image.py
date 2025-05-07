@@ -32,10 +32,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 from config.appconfig import (
-    DB_HOST, 
-    DB_NAME, 
-    DB_USER, 
-    DB_PASSWORD, 
+    DB_HOST,
+    DB_NAME,
+    DB_USER,
+    DB_PASSWORD,
     DB_PORT,
     GROQ_API_KEY
 )
@@ -193,7 +193,7 @@ class ImageProcessor:
 #-------------------------------------------------------------------------------
 class ANPRProcessor:
     """Main ANPR processing class"""
-    
+
     #----------------------------------------------------------------------------------------------
     # Initialization
     #----------------------------------------------------------------------------------------------
@@ -238,7 +238,7 @@ class ANPRProcessor:
         # --- Ensure Database Table Exists --- End
 
         logger.info("ANPRProcessor initialized for image processing with Meta's Llama 4 Scout multi-modal model.")
-    
+
     #----------------------------------------------------------------------------------------------
     # Helper: Ensure Database Table Exists
     #----------------------------------------------------------------------------------------------
@@ -275,20 +275,20 @@ class ANPRProcessor:
         finally:
             if conn:
                 self.db_pool.putconn(conn)
-    
+
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Type
-    #----------------------------------------------------------------------------------------------  
+    #----------------------------------------------------------------------------------------------
     def detect_vehicle_type(self, frame):
         """Detect vehicle type using YOLOv8 model"""
         results = self.vehicle_model.predict(frame, conf=0.5, verbose=False)
         detected_vehicles = []
-        
+
         for result in results:
             boxes = result.boxes.xyxy.cpu().numpy()
             classes = result.boxes.cls.cpu().numpy()
             confs = result.boxes.conf.cpu().numpy()
-            
+
             for box, cls, conf in zip(boxes, classes, confs):
                 cls_id = int(cls)
                 if cls_id in VEHICLE_CLASSES:
@@ -299,22 +299,22 @@ class ANPRProcessor:
                         'confidence': float(conf),
                         'box': (x1, y1, x2, y2)
                     })
-        
+
         logger.debug(f"Vehicle detection: {len(detected_vehicles)} vehicles found.")
         if not detected_vehicles:
             logger.debug("No vehicles detected in this frame.")
         return detected_vehicles
-    
+
     #----------------------------------------------------------------------------------------------
     # Detect Vehicle Color
-    #----------------------------------------------------------------------------------------------  
+    #----------------------------------------------------------------------------------------------
     def predict_vehicle_color(self, cropped_image):
         """Predict vehicle color using trained model"""
         try:
             if cropped_image.size == 0:
                 logger.debug("Empty cropped image in predict_vehicle_color.")
                 return "unknown"
-                
+
             # Preprocess image for color model
             img = cv2.resize(cropped_image, (224, 224))
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert to RGB
@@ -328,21 +328,21 @@ class ANPRProcessor:
             predicted_color = COLOR_CLASSES[top_idx] if predictions[top_idx] > 0.3 else "unknown"
             logger.debug(f"Predicted vehicle color: {predicted_color} with confidence {predictions[top_idx]:.2f}")
             return predicted_color
- 
+
         except Exception as e:
             logger.error(f"Color prediction error: {str(e)}")
             return "unknown"
-    
+
     #----------------------------------------------------------------------------------------------
     # Time Details
-    #----------------------------------------------------------------------------------------------  
+    #----------------------------------------------------------------------------------------------
     def get_time_details(self):
         """Extract detailed timestamp information"""
         now = datetime.now()
-        
+
         # Basic time info
         hour = now.hour
-        
+
         # Time of day classification
         if 5 <= hour < 12:
             time_of_day = "morning"
@@ -353,16 +353,16 @@ class ANPRProcessor:
         else:
             time_of_day = "night"
 
-            
+
         # Day of week
         day_of_week = now.strftime("%A")
-        
+
         # # Weekend or weekday
         # is_weekend = day_of_week in ["Saturday", "Sunday"]
-        
+
         # # Peak hours (typical traffic patterns)
         # is_peak_hour = (7 <= hour < 10) or (16 <= hour < 19)
-        
+
         return {
             "timestamp": now.isoformat(),
             "time_of_day": time_of_day,
@@ -370,19 +370,19 @@ class ANPRProcessor:
             # "is_weekend": is_weekend,
             # "is_peak_hour": is_peak_hour
         }
-    
+
     #----------------------------------------------------------------------------------------------
     # Preprocess Plate
-    #----------------------------------------------------------------------------------------------  
+    #----------------------------------------------------------------------------------------------
     # def preprocess_plate(self, image):
     #     """Preprocess image for better OCR results using CLAHE and Adaptive Thresholding."""
     #     if image is None or image.size == 0:
     #         logger.warning("preprocess_plate received an empty image.")
     #         return None # Return None if image is invalid
-        
+
     #     try:
     #         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            
+
     #         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
     #         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     #         contrast_enhanced_gray = clahe.apply(gray)
@@ -400,7 +400,7 @@ class ANPRProcessor:
     #         # blockSize must be odd
     #         # C is a constant subtracted from the mean or weighted sum
     #         adaptive_thresh = cv2.adaptiveThreshold(
-    #             blurred, 
+    #             blurred,
     #             255, # Max value
     #             cv2.ADAPTIVE_THRESH_GAUSSIAN_C, # Gaussian weighting for neighborhood
     #             cv2.THRESH_BINARY, # Standard binary threshold
@@ -408,12 +408,12 @@ class ANPRProcessor:
     #             C=7 # Constant subtracted from the calculated threshold
     #         )
     #         logger.debug("Applied Adaptive Thresholding.")
-            
+
     #         # Optional: Denoising (can be slow, apply if noise is significant)
     #         # denoised = cv2.fastNlMeansDenoising(adaptive_thresh, None, h=10, templateWindowSize=7, searchWindowSize=21)
     #         # logger.debug("Applied Denoising.")
     #         # return denoised
-            
+
     #         return adaptive_thresh
     #     except cv2.error as cv_err:
     #         logger.error(f"OpenCV error during preprocessing: {cv_err}")
@@ -421,7 +421,7 @@ class ANPRProcessor:
     #     except Exception as e:
     #         logger.error(f"Unexpected error during preprocessing: {e}", exc_info=True)
     #         return None
-    
+
     #----------------------------------------------------------------------------------------------
     # Helper: Clean Plate Text
     #----------------------------------------------------------------------------------------------
@@ -517,7 +517,7 @@ class ANPRProcessor:
             if not cleaned_plate:
                 logger.warning("Groq OCR did not return a valid plate string.")
                 return "", 0.0
-                    
+
             # Apply regex validation and correction heuristic directly to Groq's cleaned output
             if PLATE_REGEX.fullmatch(cleaned_plate):
                 logger.info(f"Valid plate format found via Groq: '{cleaned_plate}'")
@@ -537,7 +537,7 @@ class ANPRProcessor:
                     }
                     last_char = cleaned_plate[-1]
                     possible_corrections = correction_map.get(last_char, [])
-                    
+
                     if possible_corrections:
                         logger.debug(f"Attempting corrections for Groq result last char '{last_char}': {possible_corrections}")
                         base = cleaned_plate[:-1]
@@ -550,14 +550,14 @@ class ANPRProcessor:
                                 break # Take the first successful correction
                     else:
                         logger.debug(f"No predefined corrections found for Groq result last char '{last_char}'.")
-                
+
                 if corrected_plate:
                     # Return corrected plate with the default confidence
                     return corrected_plate, GROQ_CONFIDENCE
                 else:
                     logger.warning(f"Correction failed for Groq result '{cleaned_plate}'. Discarding.")
                     return "", 0.0 # Return empty if regex doesn't match and correction fails
-            
+
         except Exception as e:
             # Catch errors specific to the OCR step (beyond the API call itself)
             logger.error(f"Groq OCR processing step error: {str(e)}", exc_info=True)
@@ -583,7 +583,7 @@ class ANPRProcessor:
     #             substitutions = previous_row[j] + (c1 != c2)
     #             current_row.append(min(insertions, deletions, substitutions))
     #         previous_row = current_row
-        
+
     #     return previous_row[-1]
 
     #---------------------------------------------------------------------------------------------
@@ -591,7 +591,7 @@ class ANPRProcessor:
     #---------------------------------------------------------------------------------------------
     def save_to_database(self, detections, annotated_frame_filename=None):
         """Consolidates plates and saves valid ones to the database.
-        
+
         Args:
             detections (list or dict): List or dictionary of detection data.
             annotated_frame_filename (str, optional): The filename of the saved annotated frame image.
@@ -600,7 +600,7 @@ class ANPRProcessor:
         if not detections:
             logger.info("No plates to save.")
             return False # Return False as nothing was saved
-            
+
         # Convert list to dictionary when needed
         if isinstance(detections, list):
             # Convert the list to a dictionary with plate_text as the key
@@ -617,36 +617,36 @@ class ANPRProcessor:
                     detection['plate_confidence'] = detection.get('plate_confidence', 0.0)
                     detection_dict[plate_text] = detection
             detections = detection_dict
-            
+
         logger.info(f"Found {len(detections)} potential plates:")
         for plate, data in detections.items():
-            logger.info(f"  Plate: {plate}, Confidence: {data['plate_confidence']:.2f}, " 
+            logger.info(f"  Plate: {plate}, Confidence: {data['plate_confidence']:.2f}, "
                       f"Vehicle: {data['vehicle_type']}, Color: {data['vehicle_color']}")
-        
+
         # Track filtered plates for debugging
         color_filtered = []
         confidence_filtered = []
         detection_filtered = []
-        
+
         filtered_plates = {}
         for plate, data in detections.items():
             # Check each filter condition separately for better logging
             if data.get('vehicle_color', '').lower() == 'unknown':
                 color_filtered.append(plate)
                 continue
-                
+
             if data['detection_count'] < MIN_DETECTIONS:
                 detection_filtered.append(plate)
                 continue
-                
+
             # Use global MIN_CONFIDENCE
             if data['plate_confidence'] < MIN_CONFIDENCE:
                 confidence_filtered.append(plate)
                 continue
-                
+
             # If we get here, all filters passed
             filtered_plates[plate] = data
-            
+
         # Log detailed filtering results
         if color_filtered:
             logger.warning(f"Filtered out {len(color_filtered)} plates due to unknown vehicle color: {color_filtered}")
@@ -654,11 +654,11 @@ class ANPRProcessor:
             logger.warning(f"Filtered out {len(confidence_filtered)} plates due to low confidence (<{MIN_CONFIDENCE}): {confidence_filtered}")
         if detection_filtered:
             logger.warning(f"Filtered out {len(detection_filtered)} plates due to low detection count (<{MIN_DETECTIONS}): {detection_filtered}")
-        
+
         if not filtered_plates:
             logger.warning("All plates filtered out due to validation (color, count, confidence).")
             return False # Return False as nothing was saved
-        
+
         # Modified to allow duplicates at different times by removing session-level deduplication
         logger.info(f"Preparing to save {len(filtered_plates)} valid plates to database")
 
@@ -676,8 +676,8 @@ class ANPRProcessor:
                     time_details = data.get('time_details')
                     if not time_details:
                         logger.warning(f"Skipping plate {plate} due to missing time_details.")
-                        continue 
-                    
+                        continue
+
                     records_to_insert.append(
                         (
                             datetime.fromtimestamp(data['first_seen']).isoformat(),
@@ -707,23 +707,23 @@ class ANPRProcessor:
                             # Find existing record to potentially update image if current is better?
                             # For now, simpler: just log the duplicate within the batch.
                             logger.warning(f"Duplicate plate '{plate_str}' detected within save batch. Keeping first instance.")
-                            
+
                     if not final_unique_records:
                         logger.info("No unique records left after final batch deduplication.")
                         return saved_successfully # Return the success flag
 
                     logger.info(f"Inserting {len(final_unique_records)} unique records into DB.")
-                    
+
                     # Modified SQL - Add the new column
                     sql_insert = """
                         INSERT INTO detected_plates
-                        (start_time, end_time, license_plate, confidence, detection_count, 
+                        (start_time, end_time, license_plate, confidence, detection_count,
                          vehicle_type, vehicle_color, time_of_day, day_of_week, image_filename,
                          annotated_frame_filename)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """
                     # No ON CONFLICT clause to allow duplicates at different times
-                    
+
                     cursor.executemany(sql_insert, final_unique_records)
 
                     conn.commit()
@@ -740,9 +740,9 @@ class ANPRProcessor:
         finally:
             if conn:
                 self.db_pool.putconn(conn)
-            
+
         return saved_successfully # Return the success flag
-    
+
     #----------------------------------------------------------------------------------------------
     # Process Image
     #----------------------------------------------------------------------------------------------
@@ -846,9 +846,24 @@ class ANPRProcessor:
         # --- Display the result in a window - auto-close after 5 seconds with no key press required ---
         try:
             logger.info("Displaying processed image. Will automatically close after 5 seconds...")
-            cv2.imshow("ANPR Image Result", frame)
+            # --- Resize for Standard Display --- Start
+            display_max_width = 960
+            display_max_height = 720
+            orig_height, orig_width = frame.shape[:2]
+
+            # Calculate aspect ratio
+            ratio = min(display_max_width / orig_width, display_max_height / orig_height)
+            new_width = int(orig_width * ratio)
+            new_height = int(orig_height * ratio)
+
+            # Resize the frame
+            display_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA if ratio < 1 else cv2.INTER_LINEAR)
+            logger.debug(f"Resized frame from {orig_width}x{orig_height} to {new_width}x{new_height} for display.")
+            # --- Resize for Standard Display --- End
+
+            cv2.imshow("ANPR Image Result", display_frame) # Show the resized frame
             # Use waitKey with 5000ms (5 seconds) timer - window closes automatically
-            cv2.waitKey(5000) 
+            cv2.waitKey(5000)
             cv2.destroyAllWindows()
             logger.info("Image display window closed.")
         except Exception as display_error:
@@ -944,5 +959,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+
 
