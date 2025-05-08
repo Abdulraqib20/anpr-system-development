@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% from '_form_macros.html' import render_field %}
+
+{% block title %}Register - ANPR System{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6 col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-success text-white">
+                <h4 class="mb-0 text-center"><i class="bi bi-person-plus-fill me-2"></i>Create New Account</h4>
+            </div>
+            <div class="card-body p-4">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category if category != 'message' else 'info' }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
+                <form method="POST" action="{{ url_for('register') }}" novalidate>
+                    {{ form.hidden_tag() }} {# CSRF token #}
+
+                    <div class="mb-3">
+                        {{ render_field(form.username, class="form-control form-control-lg", placeholder="Choose a username") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ render_field(form.password, class="form-control form-control-lg", placeholder="Create a password") }}
+                    </div>
+
+                    <div class="mb-3">
+                        {{ render_field(form.confirm_password, class="form-control form-control-lg", placeholder="Confirm your password") }}
+                    </div>
+
+                    <div class="d-grid mt-4">
+                        {{ form.submit(class="btn btn-success btn-lg") }}
+                    </div>
+                </form>
+                <hr>
+                <p class="text-center mb-0">
+                    Already have an account? <a href="{{ url_for('login') }}">Login Here</a>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

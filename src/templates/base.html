@@ -39,6 +39,22 @@
                         </ul>
                     </li>
                     <!-- End Theme Switcher Dropdown -->
+
+                    {% if current_user.is_authenticated %}
+                        <li class="nav-item">
+                            <span class="nav-link text-info"><i class="bi bi-person-circle me-1"></i>Logged in as: {{ current_user.username }} {% if current_user.is_admin() %}(raqibcodes){% endif %}</span>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i> Logout</a>
+                        </li>
+                    {% else %}
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('login') }}"><i class="bi bi-box-arrow-in-right"></i> Login</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('register') }}"><i class="bi bi-person-plus-fill"></i> Register</a>
+                        </li>
+                    {% endif %}
                 </ul>
             </div>
         </div>
@@ -51,9 +67,7 @@
             <p class="text-muted mb-3">
                  A final-year project fulfilling the requirements for the B.Eng Degree in Computer Engineering, University of Ilorin.
             </p>
-            <p class="lead mb-0" style="font-size: 1rem;">
-                Developed by: <strong class="text-primary">codes</strong>
-            </p>
+            
         </div>
     </div>
     <!-- End Project Description Banner -->
@@ -77,4 +91,4 @@
     <!-- Custom JS -->
     {% block scripts_extra %}{% endblock %}
 </body>
-</html> 
+</html>

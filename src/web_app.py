@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
-from flask import Flask, render_template, jsonify, g, send_from_directory, abort, request, flash
+from flask import Flask, render_template, jsonify, g, send_from_directory, abort, request, flash, redirect, url_for
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import logging
@@ -16,14 +16,29 @@ import traceback
 # from .anpr_image import ANPRProcessor
 from .anpr_image import ANPRProcessor
 
+# --- Flask-Login Imports ---
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+# -------------------------
+
+# --- Flask-WTF Imports (for forms) ---
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, BooleanField, SubmitField
+from wtforms.validators import DataRequired, Length, EqualTo, ValidationError
+# -------------------------------------
+
+# --- Load .env file early ---
+load_dotenv() # Call load_dotenv() at the top
+# --------------------------
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(str(Path(__file__).parent.parent.resolve()))
 
 from config.appconfig import (
-    DB_HOST, 
-    DB_NAME, 
-    DB_USER, 
-    DB_PASSWORD, 
+    DB_HOST,
+    DB_NAME,
+    DB_USER,
+    DB_PASSWORD,
     DB_PORT
 )
 
@@ -52,7 +67,7 @@ LOG_FILE_PATH = LOGS_DIR / "web.log"
 # Get a specific logger instance for the web app
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ANPR_WebApp") # Specific name for this logger
-logger.setLevel(logging.INFO) 
+logger.setLevel(logging.INFO)
 
 # Remove existing handlers if any (important for repeated runs/debugging)
 if logger.hasHandlers():
@@ -123,13 +138,53 @@ if not TEMPLATE_DIR.is_dir():
 if not STATIC_DIR.is_dir():
     logger.warning(f"Static directory NOT found: {STATIC_DIR}")
 
-# We can explicitly set the folders, or rely on Flask's default behavior 
+# We can explicitly set the folders, or rely on Flask's default behavior
 # when the app script is in src/ and templates/static are also in src/
 # Explicit is clearer:
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 
+# --- Flask-Login Setup ---
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login' # The route name for the login page
+login_manager.login_message_category = 'info' # Bootstrap class for flash messages
+# -------------------------
+
 # Configure a secret key for flashing messages (optional but good practice)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_secret_key_for_dev')
+
+# --- Forms ---
+class LoginForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired(), Length(min=4, max=80)])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=6)])
+    remember_me = BooleanField('Remember Me')
+    submit = SubmitField('Login')
+
+class RegistrationForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired(), Length(min=4, max=80)])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=6, message='Password must be at least 6 characters long.')])
+    confirm_password = PasswordField('Confirm Password',
+                                   validators=[DataRequired(), EqualTo('password', message='Passwords must match.')])
+    submit = SubmitField('Register')
+
+    def validate_username(self, username):
+        conn = get_db()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM users WHERE username = %s", (username.data,))
+                    user_exists = cur.fetchone()
+                    if user_exists:
+                        raise ValidationError('That username is already taken. Please choose a different one.')
+            except psycopg2.Error as e:
+                logger.error(f"Registration form: Database error during username validation: {e}", exc_info=True)
+                # Let the registration proceed, but log the error. Or raise a generic validation error.
+                # For now, let's inform the user subtly, or rely on unique constraint of DB if not caught here.
+                # raise ValidationError('Could not validate username due to a server issue. Please try again.')
+            # Connection is handled by get_db and teardown
+        else:
+            logger.error("Registration form: Database connection not available for username validation.")
+            # raise ValidationError('Username validation service temporarily unavailable.')
 
 # Configure allowed extensions for upload
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp'}
@@ -172,27 +227,212 @@ except Exception as e:
     logger.error(f"CRITICAL: Failed to initialize ANPRProcessor: {e}", exc_info=True)
     # The app might still run but uploads will fail. Consider if app should exit.
 
+# --- User Model and Database ---
+class User(UserMixin):
+    def __init__(self, id, username, role='user'):
+        self.id = id
+        self.username = username
+        self.role = role
+        # Password hash will be set separately when creating/fetching user
+
+    # Flask-Login expects a get_id method
+    def get_id(self):
+        return str(self.id)
+
+    # Role-based access helper
+    def is_admin(self):
+        return self.role == 'admin'
+
+# Dummy user store for now - will be replaced by database interaction
+# users_db = {} # Example: {1: {'username': 'admin', 'password_hash': 'hashed_pw', 'role': 'admin'}}
+
+@login_manager.user_loader
+def load_user(user_id):
+    # This function will query the database for the user
+    conn = get_db()
+    if not conn:
+        logger.error("load_user: Database connection not available.")
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, username, password_hash, role FROM users WHERE id = %s", (int(user_id),))
+            user_data = cur.fetchone()
+            if user_data:
+                user = User(id=user_data[0], username=user_data[1], role=user_data[3])
+                logger.debug(f"User loaded: {user.username} (ID: {user.id}, Role: {user.role})")
+                return user
+            logger.debug(f"User with ID {user_id} not found.")
+            return None
+    except psycopg2.Error as e:
+        logger.error(f"load_user: Database error: {e}", exc_info=True)
+        return None
+    except Exception as e: # General exception handler
+        logger.error(f"load_user: Unexpected error: {e}", exc_info=True)
+        return None
+
+
+def _ensure_users_table_exists():
+    """Creates the users table if it doesn't exist."""
+    conn = None
+    pool_to_use = db_pool # Use the global pool
+    if not pool_to_use:
+        logger.error("Cannot ensure users table: Database pool not initialized.")
+        return
+
+    try:
+        conn = pool_to_use.getconn()
+        with conn.cursor() as cursor:
+            create_table_sql = """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(80) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL, -- Increased length for modern hashes
+                role VARCHAR(20) NOT NULL DEFAULT 'user', -- 'user' or 'admin'
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+            cursor.execute(create_table_sql)
+            conn.commit()
+            logger.info("Table 'users' checked/created successfully.")
+
+            # --- Create a default admin user if it doesn't exist ---
+            cursor.execute("SELECT id FROM users WHERE username = %s", ('admin',))
+            if not cursor.fetchone():
+                default_admin_password = os.environ.get('ADMIN_PASSWORD', 'default_admin_pass_123') # Consider a more secure default or prompt
+                hashed_password = generate_password_hash(default_admin_password)
+                cursor.execute(
+                    "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
+                    ('admin', hashed_password, 'admin')
+                )
+                conn.commit()
+                logger.info(f"Default admin user 'admin' created. PLEASE CHANGE THE DEFAULT PASSWORD IF APPLICABLE.")
+            else:
+                logger.info("Admin user 'admin' already exists.")
+            # ----------------------------------------------------------
+
+    except Exception as e:
+        logger.error(f"Database error during users table creation or admin user setup: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            pool_to_use.putconn(conn)
+
+# Call this function once at startup to ensure the table is there
+_ensure_users_table_exists()
+# -----------------------------
+
 # --- Routes ---
 
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('index')) # Redirect if already logged in
+
+    form = RegistrationForm()
+    if form.validate_on_submit():
+        username = form.username.data
+        password = form.password.data
+
+        hashed_password = generate_password_hash(password)
+
+        conn = get_db()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    # The validate_username method should catch existing usernames,
+                    # but a final check or relying on DB unique constraint is also an option.
+                    cur.execute("INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
+                                (username, hashed_password, 'user'))
+                    conn.commit()
+                    logger.info(f"New user registered: {username}")
+                    flash(f'Account created successfully for {username}! You can now log in.', 'success')
+                    return redirect(url_for('login'))
+            except psycopg2.IntegrityError: # Catch if username is somehow still a duplicate (unique constraint)
+                conn.rollback()
+                logger.warning(f"Registration failed for {username}: Username likely already exists (caught by DB constraint).")
+                flash('That username is already taken. Please choose another.', 'danger')
+            except psycopg2.Error as e:
+                conn.rollback()
+                logger.error(f"Registration: Database error for user {username}: {e}", exc_info=True)
+                flash('Registration failed due to a database error. Please try again later.', 'danger')
+        else:
+            logger.error("Registration: Database connection not available.")
+            flash('Registration service temporarily unavailable. Please try again later.', 'danger')
+
+    return render_template('register.html', title='Register', form=form)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index')) # Redirect if already logged in
+
+    form = LoginForm()
+    if form.validate_on_submit():
+        username = form.username.data
+        password = form.password.data
+        remember = form.remember_me.data
+
+        conn = get_db()
+        user_object = None
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, username, password_hash, role FROM users WHERE username = %s", (username,))
+                    user_data = cur.fetchone()
+                    if user_data and check_password_hash(user_data[2], password):
+                        user_object = User(id=user_data[0], username=user_data[1], role=user_data[3])
+                        logger.info(f"Login successful for user: {username}")
+                    else:
+                        logger.warning(f"Login failed for user: {username} - Invalid credentials")
+            except psycopg2.Error as e:
+                logger.error(f"Login: Database error for user {username}: {e}", exc_info=True)
+                flash('Login failed due to a database error. Please try again later.', 'danger')
+                return render_template('login.html', title='Login', form=form)
+            # No finally block to close connection here, get_db() and teardown_appcontext handle it
+        else:
+            logger.error("Login: Database connection not available.")
+            flash('Login service temporarily unavailable. Please try again later.', 'danger')
+            return render_template('login.html', title='Login', form=form)
+
+        if user_object:
+            login_user(user_object, remember=remember)
+            flash(f'Welcome back, {user_object.username}!', 'success')
+            # Redirect to the page the user was trying to access, or to index
+            next_page = request.args.get('next')
+            return redirect(next_page) if next_page else redirect(url_for('index'))
+        else:
+            flash('Invalid username or password. Please try again.', 'danger')
+
+    return render_template('login.html', title='Login', form=form)
+
+@app.route('/logout')
+@login_required # User must be logged in to logout
+def logout():
+    logout_user()
+    flash('You have been logged out successfully.', 'info')
+    return redirect(url_for('login'))
+
 @app.route('/')
+@login_required # Protect the main page
 def index():
     """Renders the main page with paginated detections, stats, and image gallery."""
     # Get search query parameter
     search_query = request.args.get('search', '').strip()
     logger.info(f"Request received for index page ('/'). Search query: '{search_query}'")
-    
+
     # --- Pagination Setup ---
     try:
         page = request.args.get('page', 1, type=int) # Get page number from query param, default to 1
         if page < 1: page = 1
     except ValueError:
         page = 1 # Default to page 1 if type conversion fails
-    
+
     ITEMS_PER_PAGE = 5 # How many detections per page
     offset = (page - 1) * ITEMS_PER_PAGE
     logger.info(f"Requesting page {page}, offset {offset}, items per page {ITEMS_PER_PAGE}")
     # ------------------------
-    
+
     conn = get_db()
     detections = []
     total_detections = 0
@@ -223,7 +463,7 @@ def index():
                 if search_query:
                     # Use ILIKE for case-insensitive matching, add wildcards
                     where_clause = " WHERE license_plate ILIKE %s"
-                    query_params.append(f"%{search_query}%") 
+                    query_params.append(f"%{search_query}%")
                     logger.info(f"Applying search filter: {search_query}")
 
                 # Fetch total FILTERED detections count (for pagination)
@@ -330,10 +570,10 @@ def index():
     if not template_path.is_file():
         logger.error(f"Template file not found at expected path: {template_path}")
         return f"Error: Template 'index.html' not found at {template_path}", 500
-    
+
     logger.debug("Rendering index.html template with paginated detections, stats, and image gallery data.")
     try:
-        return render_template('index.html', 
+        return render_template('index.html',
                                detections=detections,
                                # Pass pagination variables
                                current_page=page,
@@ -363,25 +603,25 @@ def api_detections():
                 logger.debug("Executing DB query for ALL detections (for client-side table).")
                 # Select necessary columns for display, sorting, and filtering
                 # IMPORTANT: Only fetch columns needed by the JavaScript
-                sql = """ 
-                    SELECT 
-                        license_plate, 
-                        start_time, 
-                        end_time, 
-                        confidence, 
-                        vehicle_type, 
-                        vehicle_color, 
-                        time_of_day, 
-                        day_of_week, 
+                sql = """
+                    SELECT
+                        license_plate,
+                        start_time,
+                        end_time,
+                        confidence,
+                        vehicle_type,
+                        vehicle_color,
+                        time_of_day,
+                        day_of_week,
                         image_filename,
                         annotated_frame_filename
                     FROM detected_plates
                     ORDER BY end_time DESC
-                """ 
+                """
                 cur.execute(sql)
                 colnames = [desc[0] for desc in cur.description]
                 rows = cur.fetchall()
-                
+
                 # Convert rows to list of dicts, handling datetime objects
                 for row_tuple in rows:
                     row_dict = {}
@@ -393,7 +633,7 @@ def api_detections():
                         else:
                             row_dict[col_name] = value
                     detections_data.append(row_dict)
-                
+
                 logger.info(f"Fetched {len(detections_data)} total detections for API.")
 
         except psycopg2.Error as e:
@@ -464,9 +704,10 @@ def serve_plate_image(filename):
 
 # --- Upload Route ---
 @app.route('/upload', methods=['POST'])
+@login_required # Protect the upload endpoint
 def upload_image():
     global anpr_processor # Access the globally initialized processor
-    logger.info("Received request for image upload endpoint (/upload).")
+    logger.info(f"Received request for image upload endpoint (/upload) from user: {current_user.username}")
 
     if not anpr_processor:
         logger.error("ANPRProcessor not initialized, cannot process upload.")
@@ -533,4 +774,4 @@ if __name__ == '__main__':
     # Set use_reloader=False to prevent restarts during ANPR processing
     logger.info("Starting Flask development server (reloader disabled).")
     # For 'production', set debug=False and use a production WSGI server like waitress
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False) 
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
