@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}ANPR System{% endblock %}</title>
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='logo.png') }}">
     <!-- Bootswatch Theme Link - Give it an ID for JS -->
     <link id="bootswatch-theme-link" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.5/dist/brite/bootstrap.min.css" rel="stylesheet"
           crossorigin="anonymous">
@@ -13,9 +16,144 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block head_extra %}
     <style>
-        /* Optional: Add a subtle shadow to the fixed navbar for better depth */
+        /* Enhanced Navigation Styling */
         .navbar.fixed-top {
-            box-shadow: 0 .125rem .25rem rgba(0,0,0,.075)!important;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        .navbar-brand {
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+
+        .navbar-brand:hover {
+            transform: translateY(-1px);
+        }
+
+        .navbar-brand i {
+            margin-right: 8px;
+            color: #00ff9d;
+        }
+
+        .nav-link {
+            position: relative;
+            padding: 0.5rem 1rem;
+            margin: 0 0.2rem;
+            transition: all 0.3s ease;
+        }
+
+        .nav-link:hover {
+            transform: translateY(-1px);
+        }
+
+        .nav-link.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 2px;
+            background-color: #00ff9d;
+            transition: width 0.3s ease;
+        }
+
+        .nav-link:hover::after {
+            width: 40px;
+        }
+
+        /* Theme Switcher Enhancement */
+        #theme-switcher-menu {
+            max-height: 300px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: #888 #f5f5f5;
+        }
+
+        #theme-switcher-menu::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #theme-switcher-menu::-webkit-scrollbar-track {
+            background: #f5f5f5;
+            border-radius: 10px;
+        }
+
+        #theme-switcher-menu::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 10px;
+        }
+
+        #theme-switcher-menu::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+
+        .dropdown-item {
+            padding: 0.7rem 1.2rem;
+            transition: all 0.2s ease;
+        }
+
+        .dropdown-item:hover {
+            background-color: rgba(0,255,157,0.1);
+            transform: translateX(5px);
+        }
+
+        .dropdown-item i {
+            margin-right: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .dropdown-item:hover i {
+            transform: scale(1.1);
+        }
+
+        /* Project Banner Enhancement */
+        .project-banner {
+            margin-top: 56px;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+
+        .project-banner h1 {
+            background: linear-gradient(45deg, #2c3e50, #3498db);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        }
+
+        /* Responsive Enhancements */
+        @media (max-width: 991.98px) {
+            .navbar-nav {
+                padding: 1rem 0;
+            }
+
+            .nav-link {
+                padding: 0.8rem 1rem;
+                margin: 0.2rem 0;
+            }
+
+            .nav-link.active::after {
+                width: 50px;
+            }
+
+            .dropdown-menu {
+                border: none;
+                background: transparent;
+                padding: 0;
+            }
+
+            .dropdown-item {
+                color: rgba(255,255,255,0.8) !important;
+                padding: 0.8rem 1.5rem;
+            }
+
+            .dropdown-item:hover {
+                background-color: rgba(255,255,255,0.1);
+                color: #fff !important;
+            }
         }
     </style>
     {% endblock %}
@@ -24,7 +162,8 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="bi bi-car-front-fill"></i> UNILORIN ANPR SYSTEM
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="Institution Logo" height="30" class="d-inline-block align-top me-2">
+                <span class="d-none d-sm-inline">UNILORIN ANPR SYSTEM</span>
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
                     aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
@@ -33,7 +172,10 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto align-items-center">
                     <li class="nav-item">
-                        <a class="nav-link active" aria-current="page" href="{{ url_for('index') }}"><i class="bi bi-table"></i> Detections</a>
+                        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}"><i class="bi bi-table"></i> Detections</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'about' %}active{% endif %}" href="{{ url_for('about') }}"><i class="bi bi-info-circle-fill"></i> About</a>
                     </li>
                     <!-- Theme Switcher Dropdown -->
                     <li class="nav-item dropdown">
@@ -77,13 +219,12 @@
     </nav>
 
     <!-- Project Description Banner - Updated -->
-    <div class="project-banner bg-light border-bottom mb-4 shadow-sm">
-        <div class="container py-3 text-center">
-            <h1 class="display-6 fw-bold mb-3" style="font-size: 30px; font-weight: bold;">Automatic Number Plate Recognition System</h1>
-            <p class="text-muted mb-3">
+    <div class="project-banner">
+        <div class="container py-2 text-center">
+            <h1 class="display-6 fw-bold mb-2" style="font-size: 30px; font-weight: bold;">Automatic Number Plate Recognition System</h1>
+            <p class="text-muted mb-2">
                  A final-year project fulfilling the requirements for the B.Eng Degree in Computer Engineering, University of Ilorin.
             </p>
-
         </div>
     </div>
     <!-- End Project Description Banner -->
@@ -94,11 +235,147 @@
         {% endblock %}
     </main>
 
-    <footer class="footer mt-auto py-3 bg-light">
-        <div class="container text-center">
-            <span class="text-muted">ANPR System - Final Year Project - Dept. of Computer Engineering - University of Ilorin</span>
+    <footer class="footer mt-auto py-4">
+        <div class="container">
+            <div class="row g-4">
+                <div class="col-lg-4 mb-3">
+                    <div class="footer-brand d-flex align-items-center mb-3">
+                        <img src="{{ url_for('static', filename='logo.png') }}" alt="UNILORIN Logo" height="40" class="me-2">
+                        <div>
+                            <h5 class="mb-0 footer-heading">UNILORIN ANPR</h5>
+                            <small class="footer-subheading">Automated Vehicle Recognition</small>
+                        </div>
+                    </div>
+                    <p class="small footer-text mb-0">
+                        A final year project developed for the Department of Computer Engineering,
+                        University of Ilorin.
+                    </p>
+                </div>
+
+                <div class="col-lg-4 mb-3">
+                    <h5 class="footer-heading mb-3">Quick Links</h5>
+                    <ul class="list-unstyled">
+                        <li class="mb-2">
+                            <a href="{{ url_for('index') }}" class="footer-link hover-light">
+                                <i class="bi bi-chevron-right small"></i> Detections Dashboard
+                            </a>
+                        </li>
+                        <li class="mb-2">
+                            <a href="{{ url_for('about') }}" class="footer-link hover-light">
+                                <i class="bi bi-chevron-right small"></i> About Project
+                            </a>
+                        </li>
+                        {% if not current_user.is_authenticated %}
+                        <li class="mb-2">
+                            <a href="{{ url_for('login') }}" class="footer-link hover-light">
+                                <i class="bi bi-chevron-right small"></i> Login
+                            </a>
+                        </li>
+                        {% endif %}
+                    </ul>
+                </div>
+
+                <div class="col-lg-4 mb-3">
+                    <h5 class="footer-heading mb-3">Institution</h5>
+                    <ul class="list-unstyled">
+                        <li class="mb-2">
+                            <a href="https://www.unilorin.edu.ng" target="_blank" class="footer-link hover-light">
+                                <i class="bi bi-globe2"></i> University Website
+                            </a>
+                        </li>
+                        <li class="mb-2">
+                            <a href="https://www.unilorin.edu.ng/computer-engineering" target="_blank" class="footer-link hover-light">
+                                <i class="bi bi-pc-display"></i> Department Website
+                            </a>
+                        </li>
+                        <li>
+                            <a href="https://github.com/Abdulraqib20" target="_blank" class="footer-link hover-light">
+                                <i class="bi bi-github"></i> Project Repository
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <hr class="footer-hr my-4">
+
+            <div class="row align-items-center">
+                <div class="col-md-6 text-center text-md-start">
+                    <p class="small footer-text mb-0">
+                        &copy; {{ datetime.now().year }} ANPR System. All rights reserved.
+                    </p>
+                </div>
+                <div class="col-md-6 text-center text-md-end">
+                    <p class="small footer-text mb-0">
+                        Developed by <a href="https://github.com/Abdulraqib20" target="_blank" class="footer-link hover-light">raqibcodes</a>
+                    </p>
+                </div>
+            </div>
         </div>
     </footer>
+
+    <style>
+        /* Footer Enhancements */
+        .footer {
+            position: relative;
+            margin-top: 4rem;
+            background-color: transparent !important; /* Ensure footer inherits body background */
+            padding-top: 2rem; /* Add some space for the top border effect */
+        }
+        .footer::before {
+            content: '';
+            position: absolute;
+            top: 0; /* Positioned at the very top of the footer padding */
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--bs-primary-bg-subtle, rgba(0,255,157,0.2)), transparent);
+        }
+        .footer-link, .footer-text, .footer-subheading {
+            color: var(--bs-secondary-color); /* Adapts to theme for less prominent text */
+            text-decoration: none;
+        }
+        .footer-heading {
+            color: var(--bs-emphasis-color); /* Adapts to theme for more prominent text */
+        }
+        .hover-light {
+            transition: all 0.3s ease;
+        }
+        .hover-light:hover {
+            color: var(--bs-primary) !important; /* Theme's primary color on hover */
+            transform: translateX(5px);
+        }
+        .footer-brand {
+            transition: all 0.3s ease;
+        }
+        .footer-brand:hover {
+            transform: translateY(-2px);
+        }
+        .footer h5.footer-heading {
+            position: relative;
+            padding-bottom: 0.5rem;
+            color: var(--bs-body-color); /* Ensure headings are clearly visible */
+        }
+        .footer h5.footer-heading::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 30px;
+            height: 2px;
+            background-color: var(--bs-primary); /* Theme's primary color for underline */
+        }
+        .footer-hr {
+            border-color: var(--bs-border-color-translucent) !important; /* Adapts to theme */
+        }
+
+        /* Ensure footer brand text is also adaptive */
+        .footer-brand .footer-heading,
+        .footer-brand .footer-subheading {
+            color: var(--bs-body-color); /* Or more specific variables if needed */
+        }
+
+    </style>
 
     <!-- Bootstrap Bundle JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"

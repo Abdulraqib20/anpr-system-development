@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime
+from datetime import datetime as dt
 import math
 import traceback
 
@@ -347,6 +347,17 @@ _ensure_users_table_exists()
 
 # --- Routes ---
 
+@app.context_processor
+def inject_datetime():
+    """Make datetime module available in all templates."""
+    return dict(datetime=dt)
+
+@app.route('/about')
+def about():
+    """Renders the about page."""
+    logger.info("Request received for about page ('/about').")
+    return render_template('about.html', title='About ANPR System')
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if current_user.is_authenticated:
@@ -614,7 +625,7 @@ def api_detections():
                     for i, col_name in enumerate(colnames):
                         value = row_tuple[i]
                         # Convert datetime objects to ISO format strings for JSON compatibility
-                        if isinstance(value, datetime):
+                        if isinstance(value, dt):
                             row_dict[col_name] = value.isoformat() if value else None
                         else:
                             row_dict[col_name] = value
@@ -713,7 +724,7 @@ def upload_image():
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         # Add timestamp to avoid filename collisions
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        timestamp = dt.now().strftime("%Y%m%d%H%M%S")
         unique_filename = f"{timestamp}_{filename}"
         temp_save_path = UPLOADS_DIR / unique_filename
         logger.info(f"Processing uploaded file: {filename} -> {unique_filename}")
