@@ -23,9 +23,14 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 # --- Flask-WTF Imports (for forms) ---
 from flask_wtf import FlaskForm
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 from wtforms import StringField, PasswordField, BooleanField, SubmitField
 from wtforms.validators import DataRequired, Length, EqualTo, ValidationError
 # -------------------------------------
+
+# --- functools for wraps ---
+from functools import wraps
+# ---------------------------
 
 # --- Load .env file early ---
 load_dotenv() # Call load_dotenv() at the top
@@ -143,6 +148,10 @@ if not STATIC_DIR.is_dir():
 # Explicit is clearer:
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 
+# --- CSRF Protection Setup ---
+csrf = CSRFProtect(app)
+# ---------------------------
+
 # --- Flask-Login Setup ---
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -185,6 +194,20 @@ class RegistrationForm(FlaskForm):
         else:
             logger.error("Registration form: Database connection not available for username validation.")
             # raise ValidationError('Username validation service temporarily unavailable.')
+
+# --- Custom Decorators for Access Control ---
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            flash('Please log in to access this page.', 'info')
+            return redirect(url_for('login', next=request.url))
+        if not current_user.is_admin():
+            flash('You do not have permission to access this page. Admin access required.', 'danger')
+            return redirect(url_for('index')) # Or wherever you want to redirect non-admins
+        return f(*args, **kwargs)
+    return decorated_function
+# -----------------------------------------
 
 # Configure allowed extensions for upload
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp'}
@@ -428,9 +451,9 @@ def index():
     except ValueError:
         page = 1 # Default to page 1 if type conversion fails
 
-    ITEMS_PER_PAGE = 5 # How many detections per page
+    ITEMS_PER_PAGE = 5 # How many detections per page - This is server-side, JS uses its own
     offset = (page - 1) * ITEMS_PER_PAGE
-    logger.info(f"Requesting page {page}, offset {offset}, items per page {ITEMS_PER_PAGE}")
+    logger.info(f"Requesting page {page}, offset {offset}, items per page {ITEMS_PER_PAGE} (server-side pagination)")
     # ------------------------
 
     conn = get_db()
@@ -444,145 +467,107 @@ def index():
     }
     error_message = None
 
-    # --- Fetch Detections and Stats from DB ---
+    # --- Fetch Detections and Stats from DB (Server-side pagination part) ---
+    # This part remains for initial page load if JS is disabled or for other purposes
+    # The client-side table will fetch ALL data via /api/detections
     if conn:
         try:
             with conn.cursor() as cur:
-                # Base query parts
                 count_query_base = "SELECT COUNT(*) FROM detected_plates"
                 select_query_base = """
-                    SELECT license_plate, start_time, end_time, confidence,
+                    SELECT id, license_plate, start_time, end_time, confidence,
                            detection_count, vehicle_type, vehicle_color,
-                           time_of_day, day_of_week, image_filename
+                           time_of_day, day_of_week, image_filename,
+                           annotated_frame_filename
                     FROM detected_plates
                 """
                 where_clause = ""
                 query_params = []
 
-                # Add WHERE clause if search query exists
                 if search_query:
-                    # Use ILIKE for case-insensitive matching, add wildcards
                     where_clause = " WHERE license_plate ILIKE %s"
                     query_params.append(f"%{search_query}%")
-                    logger.info(f"Applying search filter: {search_query}")
 
-                # Fetch total FILTERED detections count (for pagination)
                 count_query = count_query_base + where_clause
-                logger.debug(f"Executing DB count query: {count_query} with params: {query_params}")
-                cur.execute(count_query, tuple(query_params)) # Pass params as tuple
+                cur.execute(count_query, tuple(query_params))
                 total_count_result = cur.fetchone()
                 if total_count_result:
                     total_detections = total_count_result[0]
                     total_pages = math.ceil(total_detections / ITEMS_PER_PAGE) if ITEMS_PER_PAGE > 0 else 1
-                    logger.info(f"Total FILTERED detections: {total_detections}, Total pages: {total_pages}")
                 else:
-                    logger.warning("Could not get total filtered detection count from DB.")
                     total_detections = 0
                     total_pages = 1
 
-                # Adjust page number if it's out of bounds after filtering
-                if page > total_pages and total_pages > 0:
-                    page = total_pages
-                    offset = (page - 1) * ITEMS_PER_PAGE
-                    logger.warning(f"Requested page was too high for filtered results, adjusted to page {page}")
-                elif page < 1:
-                     page = 1
-                     offset = 0
-                     logger.warning(f"Requested page was too low, adjusted to page {page}")
+                if page > total_pages and total_pages > 0: page = total_pages
+                elif page < 1: page = 1
+                offset = (page - 1) * ITEMS_PER_PAGE
 
-                # Construct final select query with WHERE, ORDER BY, LIMIT, OFFSET
                 select_query = select_query_base + where_clause + " ORDER BY end_time DESC LIMIT %s OFFSET %s"
-                # Add pagination params to existing query params
                 final_params = query_params + [ITEMS_PER_PAGE, offset]
-                logger.debug(f"Executing DB select query: {select_query} with params: {final_params}")
                 cur.execute(select_query, tuple(final_params))
-                colnames = [desc[0] for desc in cur.description]
-                rows = cur.fetchall()
-                detections = [dict(zip(colnames, row)) for row in rows]
-                logger.info(f"Fetched {len(detections)} detections for page {page} with search '{search_query}'.")
+                # No need to process these server-side detections for the template if JS handles all
+                # But keeping the logic for total_detections and stats is fine.
 
-                # Fetch detections count for today (stats) - This is NOT filtered by search term
-                logger.debug("Executing DB query for today's TOTAL detection count (unfiltered).")
                 cur.execute("SELECT COUNT(*) FROM detected_plates WHERE DATE(end_time) = CURRENT_DATE")
                 today_count_result = cur.fetchone()
                 if today_count_result:
                     stats['today_detections'] = today_count_result[0]
-                    logger.info(f"Today's total detections count: {stats['today_detections']}")
 
         except psycopg2.Error as e:
-            logger.error(f"Database query error on index page: {e}", exc_info=True)
-            error_message = f"Database Error: Could not retrieve data."
-            # Reset stats if DB error occurs
+            logger.error(f"Database query error on index page (server-side part): {e}", exc_info=True)
+            error_message = f"Database Error: Could not retrieve initial data."
             stats = {'today_detections': 'Error'}
             total_detections = 'Error'
             total_pages = 1
             page = 1
-
     else:
-        error_message = "Database connection not available."
-        logger.error("Database connection pool not available for index request.")
+        error_message = "Database connection not available for initial data."
         stats = {'today_detections': 'N/A'}
         total_detections = 'N/A'
         total_pages = 1
         page = 1
 
-    # --- Fetch Images for Gallery ---
+    # --- Fetch Images for Gallery (This part is fine as is) ---
     try:
-        # Scan OUTPUT_DIR for full annotated frames
         logger.info(f"Scanning for annotated frame images in: {OUTPUT_DIR}")
         image_files = []
-        if OUTPUT_DIR.is_dir(): # Check the correct directory
-            # Iterate through files, getting Path objects
-            for item in OUTPUT_DIR.iterdir(): # Iterate the correct directory
-                # Filter for files ending with .jpg or .png (adjust as needed)
+        if OUTPUT_DIR.is_dir():
+            for item in OUTPUT_DIR.iterdir():
                 if item.is_file() and item.suffix.lower() in ['.jpg', '.jpeg', '.png']:
-                    # Exclude files from the plate_images subdirectory
                     if not item.parent.name == PLATE_IMAGE_DIR.name:
-                        # Get modification time for sorting
                         mtime = item.stat().st_mtime
                         image_files.append((item, mtime))
-
-            # Sort by modification time, newest first
             image_files.sort(key=lambda x: x[1], reverse=True)
-
-            # Limit the number of images displayed? (e.g., latest 100)
             max_gallery_images = 100
             image_files = image_files[:max_gallery_images]
-
-            # Process filenames
             for img_path, _ in image_files:
                 filename = img_path.name
-                # For full frames, maybe just use the filename or a simplified label
-                plate_text = filename # Or derive a label differently if needed
+                plate_text = filename
                 plate_images.append({'filename': filename, 'plate_text': plate_text})
-
             logger.info(f"Found {len(plate_images)} annotated images for the gallery (max: {max_gallery_images}).")
         else:
             logger.warning(f"Annotated image directory not found or is not a directory: {OUTPUT_DIR}")
-
     except Exception as e:
         logger.error(f"Error scanning annotated image directory: {e}", exc_info=True)
-        # Optionally set an error message for the gallery part
-        error_message = error_message + " | Error loading image gallery." if error_message else "Error loading image gallery."
+        current_error = "Error loading image gallery."
+        error_message = f"{error_message} | {current_error}" if error_message else current_error
 
     # --- Render Template ---
-    template_path = TEMPLATE_DIR / 'index.html'
-    if not template_path.is_file():
-        logger.error(f"Template file not found at expected path: {template_path}")
-        return f"Error: Template 'index.html' not found at {template_path}", 500
+    raw_csrf_token = generate_csrf() # Generate the raw token value
 
-    logger.debug("Rendering index.html template with paginated detections, stats, and image gallery data.")
+    logger.debug("Rendering index.html template...")
     try:
         return render_template('index.html',
-                               detections=detections,
-                               # Pass pagination variables
-                               current_page=page,
-                               total_pages=total_pages,
-                               total_detections=total_detections,
+                               # Server-side paginated detections (can be removed if JS handles ALL displays)
+                               # detections=detections,
+                               # current_page=page,
+                               # total_pages=total_pages,
+                               total_detections_server_fallback=total_detections, # For display if JS fails to update
                                stats=stats,
-                               plate_images=plate_images, # Pass gallery data
-                               search_query=search_query, # Pass search query back to template
-                               error=error_message)
+                               plate_images=plate_images,
+                               search_query=search_query,
+                               error=error_message,
+                               raw_csrf_token=raw_csrf_token) # Pass raw token to template
     except Exception as render_error:
         logger.error(f"Error rendering template 'index.html': {render_error}", exc_info=True)
         return f"Error rendering template: {render_error}", 500
@@ -605,6 +590,7 @@ def api_detections():
                 # IMPORTANT: Only fetch columns needed by the JavaScript
                 sql = """
                     SELECT
+                        id,
                         license_plate,
                         start_time,
                         end_time,
@@ -704,10 +690,11 @@ def serve_plate_image(filename):
 
 # --- Upload Route ---
 @app.route('/upload', methods=['POST'])
-@login_required # Protect the upload endpoint
+@login_required # User must be logged in
+@admin_required # ONLY ADMINS can upload
 def upload_image():
     global anpr_processor # Access the globally initialized processor
-    logger.info(f"Received request for image upload endpoint (/upload) from user: {current_user.username}")
+    logger.info(f"Received request for image upload endpoint (/upload) from ADMIN user: {current_user.username}")
 
     if not anpr_processor:
         logger.error("ANPRProcessor not initialized, cannot process upload.")
@@ -766,6 +753,195 @@ def upload_image():
     else:
         logger.warning(f"File type not allowed: {file.filename}")
         return jsonify({"success": False, "error": "File type not allowed."}), 400
+
+# --- Admin Routes ---
+@app.route('/admin')
+@login_required
+@admin_required
+def admin_dashboard():
+    # This page will be the main hub for admin-specific functions
+    # For now, it can just render a simple template
+    return render_template('admin/admin_dashboard.html', title='Admin Dashboard')
+
+@app.route('/admin/users')
+@login_required
+@admin_required
+def admin_manage_users():
+    conn = get_db()
+    site_users = [] # Renamed to avoid conflict with the 'users' variable name from the table
+    # Create a base FlaskForm instance for CSRF token generation in the template
+    csrf_form = FlaskForm()
+
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # Fetch all users for display - be careful with sensitive data in larger apps
+                cur.execute("SELECT id, username, role, created_at FROM users ORDER BY created_at DESC")
+                colnames = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
+                site_users = [dict(zip(colnames, row)) for row in rows]
+                logger.info(f"Admin {current_user.username} fetched {len(site_users)} users for management page.")
+        except psycopg2.Error as e:
+            logger.error(f"Admin manage users: Database error: {e}", exc_info=True)
+            flash('Could not retrieve user list due to a database error.', 'danger')
+    else:
+        logger.error("Admin manage users: Database connection not available.")
+        flash('User management service temporarily unavailable.', 'danger')
+
+    return render_template('admin/admin_users.html', title='Manage Users', users_list=site_users, csrf_form=csrf_form) # Pass csrf_form
+
+@app.route('/admin/user/change_role/<int:user_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_change_user_role(user_id):
+    action = request.form.get('action')
+    if not action in ['promote', 'demote']:
+        flash('Invalid action specified.', 'danger')
+        return redirect(url_for('admin_manage_users'))
+
+    conn = get_db()
+    if not conn:
+        flash('Database connection unavailable.', 'danger')
+        return redirect(url_for('admin_manage_users'))
+
+    try:
+        with conn.cursor() as cur:
+            # Fetch user to ensure they exist and are not the current admin trying to demote self
+            cur.execute("SELECT id, username, role FROM users WHERE id = %s", (user_id,))
+            user_to_modify = cur.fetchone()
+
+            if not user_to_modify:
+                flash('User not found.', 'danger')
+                return redirect(url_for('admin_manage_users'))
+
+            user_to_modify_username = user_to_modify[1]
+            current_role = user_to_modify[2]
+
+            if user_to_modify_username == current_user.username:
+                flash('You cannot change your own role.', 'warning')
+                return redirect(url_for('admin_manage_users'))
+
+            new_role = None
+            if action == 'promote' and current_role == 'user':
+                new_role = 'admin'
+            elif action == 'demote' and current_role == 'admin':
+                new_role = 'user'
+            else:
+                flash(f'Cannot {action} user {user_to_modify_username} from role {current_role}.', 'warning')
+                return redirect(url_for('admin_manage_users'))
+
+            cur.execute("UPDATE users SET role = %s WHERE id = %s", (new_role, user_id))
+            conn.commit()
+            logger.info(f"Admin {current_user.username} changed role of user ID {user_id} ({user_to_modify_username}) to {new_role}.")
+            flash(f"User {user_to_modify_username}'s role has been updated to {new_role}.", 'success')
+    except psycopg2.Error as e:
+        conn.rollback()
+        logger.error(f"Error changing role for user ID {user_id}: {e}", exc_info=True)
+        flash('Failed to change user role due to a database error.', 'danger')
+
+    return redirect(url_for('admin_manage_users'))
+
+@app.route('/admin/user/delete/<int:user_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_delete_user(user_id):
+    conn = get_db()
+    if not conn:
+        flash('Database connection unavailable.', 'danger')
+        return redirect(url_for('admin_manage_users'))
+
+    try:
+        with conn.cursor() as cur:
+            # Fetch user to ensure they exist and are not the current admin trying to delete self
+            cur.execute("SELECT username FROM users WHERE id = %s", (user_id,))
+            user_to_delete = cur.fetchone()
+
+            if not user_to_delete:
+                flash('User not found.', 'danger')
+                return redirect(url_for('admin_manage_users'))
+
+            user_to_delete_username = user_to_delete[0]
+
+            if user_to_delete_username == current_user.username:
+                flash('You cannot delete your own account.', 'warning')
+                return redirect(url_for('admin_manage_users'))
+
+            cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+            conn.commit()
+            logger.info(f"Admin {current_user.username} deleted user ID {user_id} ({user_to_delete_username}).")
+            flash(f'User {user_to_delete_username} has been deleted successfully.', 'success')
+    except psycopg2.Error as e:
+        conn.rollback()
+        logger.error(f"Error deleting user ID {user_id}: {e}", exc_info=True)
+        flash('Failed to delete user due to a database error.', 'danger')
+
+    return redirect(url_for('admin_manage_users'))
+
+# --- Detection Management Routes (Admin Only) ---
+@app.route('/detection/delete/<int:detection_id>', methods=['POST'])
+@login_required
+@admin_required
+def delete_detection(detection_id):
+    logger.info(f"Admin {current_user.username} attempting to delete detection ID: {detection_id}")
+    conn = get_db()
+    if not conn:
+        flash('Database connection unavailable. Could not delete detection.', 'danger')
+        return redirect(url_for('index'))
+
+    try:
+        with conn.cursor() as cur:
+            # First, get the filenames for the images to delete them from filesystem
+            cur.execute("SELECT image_filename, annotated_frame_filename FROM detected_plates WHERE id = %s", (detection_id,))
+            image_files = cur.fetchone()
+
+            if not image_files:
+                flash(f'Detection record with ID {detection_id} not found.', 'warning')
+                return redirect(url_for('index'))
+
+            # Delete the database record
+            cur.execute("DELETE FROM detected_plates WHERE id = %s", (detection_id,))
+            conn.commit()
+            logger.info(f"Successfully deleted detection record ID: {detection_id} from database.")
+
+            # Attempt to delete associated image files
+            plate_image_to_delete, annotated_frame_to_delete = image_files
+
+            if plate_image_to_delete:
+                try:
+                    plate_image_path = PLATE_IMAGE_DIR / plate_image_to_delete
+                    if plate_image_path.exists():
+                        os.remove(plate_image_path)
+                        logger.info(f"Deleted cropped plate image: {plate_image_path}")
+                    else:
+                        logger.warning(f"Cropped plate image not found for deletion: {plate_image_path}")
+                except OSError as e:
+                    logger.error(f"Error deleting cropped plate image {plate_image_to_delete}: {e}")
+
+            if annotated_frame_to_delete:
+                try:
+                    annotated_frame_path = OUTPUT_DIR / annotated_frame_to_delete # Annotated frames are in OUTPUT_DIR directly
+                    if annotated_frame_path.exists():
+                        os.remove(annotated_frame_path)
+                        logger.info(f"Deleted annotated frame image: {annotated_frame_path}")
+                    else:
+                        logger.warning(f"Annotated frame image not found for deletion: {annotated_frame_path}")
+                except OSError as e:
+                    logger.error(f"Error deleting annotated frame image {annotated_frame_to_delete}: {e}")
+
+            flash(f'Detection record ID {detection_id} and associated images (if found) have been deleted.', 'success')
+
+    except psycopg2.Error as e:
+        conn.rollback()
+        logger.error(f"Database error deleting detection ID {detection_id}: {e}", exc_info=True)
+        flash('Failed to delete detection record due to a database error.', 'danger')
+    except Exception as e:
+        # Catch any other unexpected errors during file operations or logic
+        conn.rollback() # Ensure rollback on any error before commit
+        logger.error(f"Unexpected error deleting detection ID {detection_id}: {e}", exc_info=True)
+        flash('An unexpected error occurred while trying to delete the detection.', 'danger')
+
+    return redirect(url_for('index'))
+# ----------------------------------------------
 
 # --- Main Execution ---
 if __name__ == '__main__':

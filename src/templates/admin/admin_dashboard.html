@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }} - ANPR System{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row mb-3">
+        <div class="col">
+            <h2 class="display-6 border-bottom pb-2"><i class="bi bi-person-gear me-2"></i>Admin Dashboard</h2>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category if category != 'message' else 'info' }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body text-center">
+                    <i class="bi bi-people-fill display-4 text-primary mb-2"></i>
+                    <h5 class="card-title">Manage Users</h5>
+                    <p class="card-text small">View, edit roles, or delete user accounts.</p>
+                    <a href="{{ url_for('admin_manage_users') }}" class="btn btn-primary"><i class="bi bi-arrow-right-circle me-1"></i>Go to User Management</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4 mb-3">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body text-center">
+                    <i class="bi bi-card-list display-4 text-success mb-2"></i>
+                    <h5 class="card-title">View Detections</h5>
+                    <p class="card-text small">Access the main detections table (admin view may have more controls later).</p>
+                    <a href="{{ url_for('index') }}" class="btn btn-success"><i class="bi bi-table me-1"></i>Go to Detections</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Placeholder for future admin features -->
+        <div class="col-md-4 mb-3">
+            <div class="card h-100 shadow-sm bg-light">
+                <div class="card-body text-center text-muted">
+                    <i class="bi bi-tools display-4 mb-2"></i>
+                    <h5 class="card-title">More Tools (Coming Soon)</h5>
+                    <p class="card-text small">System logs, configuration, etc.</p>
+                    <button class="btn btn-secondary" disabled><i class="bi bi-gear me-1"></i>Future Feature</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
