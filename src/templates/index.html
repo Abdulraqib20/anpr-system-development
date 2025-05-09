@@ -929,126 +929,188 @@
 
         const files = imageFile.files;
         const totalFiles = files.length;
+        const UPLOAD_TIMEOUT_MS = 60000; // 60 seconds timeout per file
 
         uploadButton.disabled = true;
         uploadButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...';
         cancelUploadButton.style.display = 'inline-block';
-        uploadResult.style.display = 'none'; // Hide previous results
-        uploadResult.innerHTML = ''; // Clear previous results
+        uploadResult.style.display = 'none';
+        uploadResult.innerHTML = '';
         uploadProgressContainer.style.height = 'auto';
         uploadProgressBar.style.width = '0%';
-        uploadProgressBar.classList.remove('bg-success', 'bg-danger');
+        uploadProgressBar.classList.remove('bg-success', 'bg-danger', 'progress-bar-animated');
         uploadProgressBar.textContent = '';
         uploadStatus.textContent = `Starting upload of ${totalFiles} file(s).`;
 
         let overallSuccess = true;
         let filesProcessed = 0;
 
-        for (let i = 0; i < totalFiles; i++) {
-            const file = files[i];
-            const formData = new FormData();
-            formData.append('imageFile', file);
-            formData.append('csrf_token', raw_csrf_token_value);
+        try { // Outer try for the whole submit process
+            for (let i = 0; i < totalFiles; i++) {
+                const file = files[i];
+                const formData = new FormData();
+                formData.append('imageFile', file);
+                formData.append('csrf_token', raw_csrf_token_value);
 
-            uploadStatus.textContent = `Uploading file ${i + 1} of ${totalFiles}: ${file.name}`;
-            uploadProgressBar.style.width = '0%';
-            uploadProgressBar.classList.remove('bg-success', 'bg-danger');
-            uploadProgressBar.textContent = '';
+                uploadStatus.textContent = `Preparing to upload file ${i + 1} of ${totalFiles}: ${file.name}`;
+                uploadProgressBar.style.width = '0%';
+                uploadProgressBar.classList.remove('bg-success', 'bg-danger');
+                uploadProgressBar.classList.add('progress-bar-animated'); // Add animated class back
+                uploadProgressBar.textContent = '0%';
+                console.log(`[File ${i+1}/${totalFiles}] Starting processing for: ${file.name}`);
 
-            try {
-                currentXhr = new XMLHttpRequest(); // Create a new XHR for each file
-                const responseText = await new Promise((resolve, reject) => {
-                    currentXhr.upload.onprogress = (e) => {
-                        if (e.lengthComputable) {
-                            const percentComplete = Math.round((e.loaded / e.total) * 100);
-                            uploadProgressBar.style.width = percentComplete + '%';
-                            uploadProgressBar.textContent = percentComplete + '%';
-                            if (percentComplete < 100) {
-                                uploadStatus.textContent = `Uploading ${file.name} (${i+1}/${totalFiles}): ${percentComplete}%`;
-                            } else {
-                                uploadStatus.textContent = `Processing ${file.name} (${i+1}/${totalFiles})...`;
-                                uploadProgressBar.classList.remove('progress-bar-animated');
+                try { // Inner try for each file's promise
+                    currentXhr = new XMLHttpRequest();
+
+                    const responseText = await new Promise((resolve, reject) => {
+                        let timeoutId = setTimeout(() => {
+                            console.warn(`[File ${i+1}/${totalFiles}] Upload TIMEOUT for ${file.name} after ${UPLOAD_TIMEOUT_MS}ms. Aborting XHR.`);
+                            if (currentXhr) {
+                                currentXhr.abort(); // This should trigger onabort
                             }
-                        }
-                    };
+                            // Reject is now primarily handled by onabort or onerror for consistency
+                            // reject({ status: 0, statusText: 'Upload timed out', fileName: file.name });
+                        }, UPLOAD_TIMEOUT_MS);
 
-                    currentXhr.onload = () => {
-                        if (currentXhr.status >= 200 && currentXhr.status < 300) {
-                            resolve(currentXhr.responseText);
-                        } else {
-                            reject({ status: currentXhr.status, statusText: currentXhr.statusText, responseText: currentXhr.responseText });
-                        }
-                    };
-                    currentXhr.onerror = () => reject({ status: 0, statusText: 'Network error' });
-                    currentXhr.onabort = () => reject({ status: 0, statusText: 'Upload aborted by user' });
+                        currentXhr.upload.onprogress = (e) => {
+                            if (e.lengthComputable) {
+                                const percentComplete = Math.round((e.loaded / e.total) * 100);
+                                uploadProgressBar.style.width = percentComplete + '%';
+                                uploadProgressBar.textContent = percentComplete + '%';
+                                if (percentComplete < 100) {
+                                    uploadStatus.textContent = `Uploading ${file.name} (${i+1}/${totalFiles}): ${percentComplete}%`;
+                                } else {
+                                    uploadStatus.textContent = `Processing ${file.name} (${i+1}/${totalFiles})... Server is working.`;
+                                    uploadProgressBar.classList.remove('progress-bar-animated');
+                                }
+                            }
+                        };
 
-                    currentXhr.open('POST', UPLOAD_URL, true);
-                    currentXhr.send(formData);
-                });
+                        currentXhr.onload = () => {
+                            clearTimeout(timeoutId);
+                            console.log(`[File ${i+1}/${totalFiles}] XHR onload for ${file.name}. Status: ${currentXhr.status}`);
+                            if (currentXhr.status >= 200 && currentXhr.status < 300) {
+                                resolve(currentXhr.responseText);
+                            } else {
+                                reject({ status: currentXhr.status, statusText: currentXhr.statusText, responseText: currentXhr.responseText, fileName: file.name });
+                            }
+                        };
+                        currentXhr.onerror = () => {
+                            clearTimeout(timeoutId);
+                            console.error(`[File ${i+1}/${totalFiles}] XHR onerror for ${file.name}.`);
+                            reject({ status: 0, statusText: 'Network error or XHR error', fileName: file.name });
+                        };
+                        currentXhr.onabort = () => {
+                            clearTimeout(timeoutId);
+                            console.warn(`[File ${i+1}/${totalFiles}] XHR onabort for ${file.name}.`);
+                            reject({ status: 0, statusText: 'Upload aborted by user or timeout', fileName: file.name });
+                        };
+                        currentXhr.ontimeout = () => { // Browser-level timeout, distinct from our JS timeout
+                            clearTimeout(timeoutId);
+                            console.warn(`[File ${i+1}/${totalFiles}] XHR ontimeout (browser) for ${file.name}.`);
+                            reject({ status: 0, statusText: 'Upload hit XHR native timeout', fileName: file.name});
+                        };
 
-                filesProcessed++;
-                uploadProgressBar.classList.add('bg-success');
-                uploadProgressBar.textContent = 'Done';
-                const response = JSON.parse(responseText);
-                if (response.success) {
-                    showUploadResult('success', `<i class="bi bi-check-circle-fill"></i> Successfully processed: ${file.name}. ${response.message || ''}`, true);
-                } else {
+
+                        currentXhr.open('POST', UPLOAD_URL, true);
+                        // currentXhr.timeout = UPLOAD_TIMEOUT_MS; // Can also set native XHR timeout
+                        console.log(`[File ${i+1}/${totalFiles}] Sending XHR for ${file.name}`);
+                        currentXhr.send(formData);
+                    });
+
+                    console.log(`[File ${i+1}/${totalFiles}] Promise resolved for ${file.name}. Response length: ${responseText.length}`);
+                    filesProcessed++;
+                    uploadProgressBar.classList.add('bg-success');
+                    uploadProgressBar.textContent = 'Processed';
+                    const response = JSON.parse(responseText);
+                    if (response.success) {
+                        showUploadResult('success', `<i class="bi bi-check-circle-fill"></i> Successfully processed: ${file.name}. ${response.message || ''}`, true);
+                    } else {
+                        overallSuccess = false;
+                        showUploadResult('danger', `<i class="bi bi-exclamation-triangle-fill"></i> Failed to process: ${file.name}. Error: ${response.error || 'Unknown server error'} ${response.details ? JSON.stringify(response.details) : ''}`, true);
+                    }
+
+                } catch (errorObj) {
+                    filesProcessed++; // Count as processed even if it failed or was aborted
                     overallSuccess = false;
-                    showUploadResult('danger', `<i class="bi bi-exclamation-triangle-fill"></i> Failed to process: ${file.name}. Error: ${response.error || 'Unknown error'}`, true);
+                    uploadProgressBar.classList.add('bg-danger');
+                    uploadProgressBar.textContent = 'Failed/Cancelled';
+
+                    const errFileName = errorObj.fileName || file.name;
+                    let errorMsg = `Error with ${errFileName}: `;
+                    console.error(`[File ${i+1}/${totalFiles}] Caught error for ${errFileName}:`, errorObj);
+
+                    if (errorObj.statusText === 'Upload aborted by user or timeout') {
+                        errorMsg = `Upload cancelled or timed out for ${errFileName}.`;
+                        showUploadResult('warning', `<i class="bi bi-slash-circle-fill"></i> ${errorMsg}`, true);
+                        uploadStatus.textContent = `Upload process cancelled/timed out after ${filesProcessed} of ${totalFiles} files.`;
+                        break;
+                    } else if (errorObj.statusText === 'Upload timed out') { // From our JS timeout
+                        errorMsg = `Upload timed out for ${errFileName}.`;
+                        showUploadResult('danger', `<i class="bi bi-clock-history"></i> ${errorMsg}`, true);
+                        uploadStatus.textContent = `Upload process timed out for ${errFileName}.`;
+                        break;
+                    } else if (errorObj.status === 0) {
+                        errorMsg += 'Network error or server unavailable.';
+                    } else {
+                        errorMsg += `Server error ${errorObj.status || ''}: ${errorObj.statusText || ''}. `;
+                        try {
+                            const errResp = JSON.parse(errorObj.responseText);
+                            errorMsg += errResp.error || '';
+                        } catch (e) { /* no json response or already part of statusText */ }
+                    }
+                    showUploadResult('danger', `<i class="bi bi-exclamation-triangle-fill"></i> ${errorMsg}`, true);
+                    if (errorObj.statusText === 'Upload aborted by user or timeout' || errorObj.statusText === 'Upload timed out') {
+                        break; // Explicitly break if it was an abort or our timeout
+                    }
+                } finally {
+                    console.log(`[File ${i+1}/${totalFiles}] Inner finally block for ${file.name}. currentXhr is now null.`);
+                    currentXhr = null;
                 }
-
-            } catch (errorObj) {
-                filesProcessed++;
-                overallSuccess = false;
-                uploadProgressBar.classList.add('bg-danger');
-                uploadProgressBar.textContent = 'Failed';
-                let errorMsg = `Error with ${file.name}: `;
-                if (errorObj.statusText === 'Upload aborted by user') {
-                    errorMsg = `Upload cancelled for ${file.name}.`;
-                    showUploadResult('warning', `<i class="bi bi-slash-circle-fill"></i> ${errorMsg}`, true);
-                    // If one is cancelled, stop processing further files
-                    uploadStatus.textContent = `Upload process cancelled after ${filesProcessed} of ${totalFiles} files.`;
-                    break;
-                } else if (errorObj.status === 0) { // Network error
-                    errorMsg += 'Network error or server unavailable.';
-                } else { // HTTP error from server
-                    errorMsg += `Server error ${errorObj.status || ''}: ${errorObj.statusText || ''}. `;
-                    try {
-                         const errResp = JSON.parse(errorObj.responseText);
-                         errorMsg += errResp.error || '';
-                    } catch (e) { /* no json response */ }
+                 // Brief pause before next file for readability, if not cancelled/timed out
+                if (filesProcessed < totalFiles && overallSuccess) { // Only pause if last was success
+                    await new Promise(resolve => setTimeout(resolve, 300));
                 }
-                showUploadResult('danger', `<i class="bi bi-exclamation-triangle-fill"></i> ${errorMsg}`, true);
+            } // end of for loop
+        } catch (overallError) {
+            console.error("Overall error in handleUploadSubmit (outside file loop):", overallError);
+            showUploadResult('danger', 'An unexpected system error occurred during the upload process. Please check console.');
+        } finally {
+            console.log("Outer finally block in handleUploadSubmit. Files processed:", filesProcessed, "Total files:", totalFiles);
+            if (filesProcessed === totalFiles) {
+                uploadStatus.textContent = `Finished processing all ${totalFiles} file(s).`;
+            } else if (filesProcessed < totalFiles && filesProcessed > 0) {
+                // This case implies a 'break' happened due to cancel/timeout
+                uploadStatus.textContent = `Upload process stopped after attempting ${filesProcessed} of ${totalFiles} file(s).`;
+            } else if (filesProcessed === 0 && totalFiles > 0) {
+                uploadStatus.textContent = "No files were processed. Check for errors.";
             }
-            currentXhr = null;
-             // Brief pause before next file for readability, if not cancelled
-             if (filesProcessed < totalFiles && errorObj && errorObj.statusText !== 'Upload aborted by user') {
-                await new Promise(resolve => setTimeout(resolve, 500));
+
+
+            if (overallSuccess && filesProcessed === totalFiles) {
+                // showUploadResult('success', 'All files processed successfully. Table will refresh.', true); // Message is per file now
+            } else if (!overallSuccess && filesProcessed > 0) {
+                // showUploadResult('warning', 'Some files had issues. See details above.', true);
             }
-        }
 
-        // Final UI update after all files are attempted
-        if (filesProcessed === totalFiles) {
-            uploadStatus.textContent = `Finished processing ${totalFiles} file(s).`;
-        } else if (currentXhr === null) { // Loop was broken by cancel
-             // Message already set by abort handler
-        } else {
-             uploadStatus.textContent = `Processed ${filesProcessed} of ${totalFiles} file(s).`;
+            fetchAndUpdateData(true);
+            resetUploadUI(true);
+            console.log("Upload UI reset and data fetch triggered.");
         }
-
-        if (overallSuccess && filesProcessed === totalFiles) {
-            // showUploadResult('success', 'All files processed successfully. Table will refresh.', true);
-        } else if (filesProcessed > 0) {
-            // showUploadResult('warning', 'Some files had issues. See details above.', true);
-        }
-
-        fetchAndUpdateData(true); // Refresh data table regardless of individual errors
-        resetUploadUI(true); // Clear file input after all uploads are done
     }
 
     function handleUploadCancel() {
+        console.log("Cancel button clicked by user.");
         if (currentXhr) {
-            currentXhr.abort();
+            showUploadResult('warning', 'Cancellation request sent...', true);
+            uploadStatus.textContent = 'Attempting to cancel current file upload...';
+            console.log("Attempting to abort currentXhr:", currentXhr);
+            currentXhr.abort(); // This should trigger the onabort handler in the promise
+        } else {
+            console.log("Cancel button clicked, but no active XHR to abort (currentXhr is null). UI will be reset.");
+            showUploadResult('info', 'No active upload to cancel. Resetting UI.', false);
+            uploadStatus.textContent = 'No active upload.';
+            resetUploadUI(false); // Reset UI if nothing was apparently running
         }
     }
 

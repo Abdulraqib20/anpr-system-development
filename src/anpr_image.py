@@ -936,35 +936,6 @@ class ANPRProcessor:
         except Exception as e:
             logger.error(f"Error processing image: {e}", exc_info=True)
 
-        # --- Display the result in a window - auto-close after 5 seconds with no key press required ---
-        try:
-            logger.info("Displaying processed image. Will automatically close after 5 seconds...")
-            # --- Resize for Standard Display --- Start
-            display_max_width = 960
-            display_max_height = 720
-            orig_height, orig_width = frame.shape[:2]
-
-            # Calculate aspect ratio
-            ratio = min(display_max_width / orig_width, display_max_height / orig_height)
-            new_width = int(orig_width * ratio)
-            new_height = int(orig_height * ratio)
-
-            # Resize the frame
-            display_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA if ratio < 1 else cv2.INTER_LINEAR)
-            logger.debug(f"Resized frame from {orig_width}x{orig_height} to {new_width}x{new_height} for display.")
-            # --- Resize for Standard Display --- End
-
-            cv2.imshow("ANPR Image Result", display_frame) # Show the resized frame
-            # Use waitKey with 5000ms (5 seconds) timer - window closes automatically
-            cv2.waitKey(5000)
-            cv2.destroyAllWindows()
-            logger.info("Image display window closed.")
-        except Exception as display_error:
-            logger.error(f"Error displaying image: {display_error}", exc_info=True)
-            # Ensure windows are destroyed even if imshow/waitKey fails
-            cv2.destroyAllWindows()
-        # -------------------------------------
-
         # Return the annotated image AND the collected detections
         return frame, processed_detections
 
