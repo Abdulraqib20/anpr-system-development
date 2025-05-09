@@ -597,8 +597,6 @@ def api_detections():
         try:
             with conn.cursor() as cur:
                 logger.debug("Executing DB query for ALL detections (for client-side table).")
-                # Select necessary columns for display, sorting, and filtering
-                # IMPORTANT: Only fetch columns needed by the JavaScript
                 sql = """
                     SELECT
                         id,
@@ -608,6 +606,7 @@ def api_detections():
                         confidence,
                         vehicle_type,
                         vehicle_color,
+                        car_brand,
                         time_of_day,
                         day_of_week,
                         image_filename,
@@ -619,13 +618,11 @@ def api_detections():
                 colnames = [desc[0] for desc in cur.description]
                 rows = cur.fetchall()
 
-                # Convert rows to list of dicts, handling datetime objects
                 for row_tuple in rows:
                     row_dict = {}
                     for i, col_name in enumerate(colnames):
                         value = row_tuple[i]
-                        # Convert datetime objects to ISO format strings for JSON compatibility
-                        if isinstance(value, dt):
+                        if isinstance(value, dt): # Check for datetime.datetime
                             row_dict[col_name] = value.isoformat() if value else None
                         else:
                             row_dict[col_name] = value
@@ -704,7 +701,7 @@ def serve_plate_image(filename):
 @login_required # User must be logged in
 @admin_required # ONLY ADMINS can upload
 def upload_image():
-    global anpr_processor # Access the globally initialized processor
+    global anpr_processor
     logger.info(f"Received request for image upload endpoint (/upload) from ADMIN user: {current_user.username}")
 
     if not anpr_processor:
@@ -715,55 +712,68 @@ def upload_image():
         logger.warning("No 'imageFile' part in the request files.")
         return jsonify({"success": False, "error": "No file part in the request."}), 400
 
-    file = request.files['imageFile']
+    uploaded_files = request.files.getlist('imageFile') # Get a list of files
 
-    if file.filename == '':
-        logger.warning("No file selected for upload.")
-        return jsonify({"success": False, "error": "No selected file."}), 400
+    if not uploaded_files or all(f.filename == '' for f in uploaded_files):
+        logger.warning("No files selected for upload.")
+        return jsonify({"success": False, "error": "No selected file(s)."}), 400
 
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        # Add timestamp to avoid filename collisions
-        timestamp = dt.now().strftime("%Y%m%d%H%M%S")
-        unique_filename = f"{timestamp}_{filename}"
-        temp_save_path = UPLOADS_DIR / unique_filename
-        logger.info(f"Processing uploaded file: {filename} -> {unique_filename}")
+    processed_count = 0
+    error_count = 0
+    results_summary = [] # To store summary of each file processing
 
-        try:
-            # Save the file temporarily
-            file.save(temp_save_path)
-            logger.info(f"Temporarily saved uploaded file to: {temp_save_path}")
+    for file_storage_object in uploaded_files:
+        if file_storage_object and allowed_file(file_storage_object.filename):
+            original_filename = secure_filename(file_storage_object.filename)
+            timestamp = dt.now().strftime("%Y%m%d%H%M%S%f") # More precision for multiple files
+            unique_filename = f"{timestamp}_{original_filename}"
+            temp_save_path = UPLOADS_DIR / unique_filename
+            logger.info(f"Processing uploaded file: {original_filename} -> {unique_filename}")
 
-            # --- Call ANPR processing --- #
-            logger.info(f"Starting ANPR processing for: {temp_save_path}")
-            # Use the globally initialized processor
-            anpr_processor.process_image_source(str(temp_save_path))
-            logger.info(f"ANPR processing finished for: {temp_save_path}")
-            # -------------------------- #
+            try:
+                file_storage_object.save(temp_save_path)
+                logger.info(f"Temporarily saved uploaded file to: {temp_save_path}")
 
-            # Return success message
-            message = f"File '{filename}' uploaded and processed successfully."
-            logger.info(message)
-            return jsonify({"success": True, "message": message}), 200
+                anpr_processor.process_image_source(str(temp_save_path))
+                logger.info(f"ANPR processing finished for: {temp_save_path}")
 
-        except Exception as e:
-            # Log detailed error including traceback
-            error_details = traceback.format_exc()
-            logger.error(f"Error processing uploaded file {temp_save_path}: {e}\n{error_details}")
-            return jsonify({"success": False, "error": f"Processing failed: {e}"}), 500
+                results_summary.append({"filename": original_filename, "status": "success", "message": "Processed successfully."})
+                processed_count += 1
 
-        finally:
-            # --- Clean up temporary file --- #
-            if temp_save_path.exists():
-                try:
-                    os.remove(temp_save_path)
-                    logger.info(f"Removed temporary file: {temp_save_path}")
-                except OSError as e:
-                    logger.error(f"Error removing temporary file {temp_save_path}: {e}")
-            # ------------------------------- #
-    else:
-        logger.warning(f"File type not allowed: {file.filename}")
-        return jsonify({"success": False, "error": "File type not allowed."}), 400
+            except Exception as e:
+                error_details = traceback.format_exc()
+                logger.error(f"Error processing uploaded file {temp_save_path}: {e}\n{error_details}")
+                results_summary.append({"filename": original_filename, "status": "error", "message": f"Processing failed: {str(e)}"})
+                error_count += 1
+            finally:
+                if temp_save_path.exists():
+                    try:
+                        os.remove(temp_save_path)
+                        logger.info(f"Removed temporary file: {temp_save_path}")
+                    except OSError as e_remove:
+                        logger.error(f"Error removing temporary file {temp_save_path}: {e_remove}")
+        elif file_storage_object:
+            original_filename = secure_filename(file_storage_object.filename)
+            logger.warning(f"File type not allowed for file: {original_filename}")
+            results_summary.append({"filename": original_filename, "status": "error", "message": "File type not allowed."})
+            error_count += 1
+
+    if processed_count == 0 and error_count == 0: # Should not happen if files were initially present
+        return jsonify({"success": False, "error": "No valid files were processed."}), 400
+
+    final_message = f"Processed {processed_count} file(s) successfully."
+    if error_count > 0:
+        final_message += f" Encountered errors with {error_count} file(s)."
+
+    # The frontend currently expects a single success/error for the overall operation
+    # rather than a list of results. For simplicity, we send a general status.
+    # The detailed per-file status is now shown on the client-side JS as it processes.
+    if error_count > 0 and processed_count == 0:
+        return jsonify({"success": False, "error": final_message, "details": results_summary}), 207 # Multi-Status with error focus
+    elif error_count > 0: # Mixed results
+        return jsonify({"success": True, "message": final_message, "details": results_summary}), 207 # Multi-Status
+    else: # All successful
+        return jsonify({"success": True, "message": final_message, "details": results_summary}), 200
 
 # --- Admin Routes ---
 @app.route('/admin')
@@ -901,7 +911,6 @@ def delete_detection(detection_id):
 
     try:
         with conn.cursor() as cur:
-            # First, get the filenames for the images to delete them from filesystem
             cur.execute("SELECT image_filename, annotated_frame_filename FROM detected_plates WHERE id = %s", (detection_id,))
             image_files = cur.fetchone()
 
@@ -909,12 +918,10 @@ def delete_detection(detection_id):
                 flash(f'Detection record with ID {detection_id} not found.', 'warning')
                 return redirect(url_for('index'))
 
-            # Delete the database record
             cur.execute("DELETE FROM detected_plates WHERE id = %s", (detection_id,))
             conn.commit()
             logger.info(f"Successfully deleted detection record ID: {detection_id} from database.")
 
-            # Attempt to delete associated image files
             plate_image_to_delete, annotated_frame_to_delete = image_files
 
             if plate_image_to_delete:
@@ -930,7 +937,7 @@ def delete_detection(detection_id):
 
             if annotated_frame_to_delete:
                 try:
-                    annotated_frame_path = OUTPUT_DIR / annotated_frame_to_delete # Annotated frames are in OUTPUT_DIR directly
+                    annotated_frame_path = OUTPUT_DIR / annotated_frame_to_delete
                     if annotated_frame_path.exists():
                         os.remove(annotated_frame_path)
                         logger.info(f"Deleted annotated frame image: {annotated_frame_path}")
@@ -946,12 +953,94 @@ def delete_detection(detection_id):
         logger.error(f"Database error deleting detection ID {detection_id}: {e}", exc_info=True)
         flash('Failed to delete detection record due to a database error.', 'danger')
     except Exception as e:
-        # Catch any other unexpected errors during file operations or logic
-        conn.rollback() # Ensure rollback on any error before commit
+        conn.rollback()
         logger.error(f"Unexpected error deleting detection ID {detection_id}: {e}", exc_info=True)
         flash('An unexpected error occurred while trying to delete the detection.', 'danger')
 
     return redirect(url_for('index'))
+
+@app.route('/admin/usage-metrics')
+@login_required
+@admin_required
+def admin_usage_metrics():
+    logger.info(f"Admin {current_user.username} accessing Groq API Usage Metrics page.")
+    conn = get_db()
+    usage_data = {
+        'summary_stats': {},
+        'recent_calls': [],
+        'by_call_type': {},
+        'error': None
+    }
+
+    if not conn:
+        usage_data['error'] = "Database connection not available."
+        logger.error("Groq Usage Metrics: Database connection not available.")
+        return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics', usage_data=usage_data)
+
+    try:
+        with conn.cursor() as cur:
+            # 1. Summary Stats (Total calls, total tokens today and overall)
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total_calls,
+                    SUM(total_tokens) AS grand_total_tokens,
+                    SUM(CASE WHEN DATE(timestamp) = CURRENT_DATE THEN total_tokens ELSE 0 END) AS today_total_tokens,
+                    COUNT(CASE WHEN DATE(timestamp) = CURRENT_DATE THEN 1 ELSE NULL END) AS today_total_calls
+                FROM groq_api_usage;
+            """)
+            summary = cur.fetchone()
+            if summary:
+                usage_data['summary_stats'] = {
+                    'total_calls': summary[0] or 0,
+                    'grand_total_tokens': summary[1] or 0,
+                    'today_total_tokens': summary[2] or 0,
+                    'today_total_calls': summary[3] or 0
+                }
+
+            # 2. Recent API Calls (e.g., last 20)
+            cur.execute("""
+                SELECT timestamp, api_call_type, model_name, prompt_tokens, completion_tokens, total_tokens, related_detection_id
+                FROM groq_api_usage
+                ORDER BY timestamp DESC
+                LIMIT 20;
+            """)
+            colnames_recent = [desc[0] for desc in cur.description]
+            usage_data['recent_calls'] = [dict(zip(colnames_recent, row)) for row in cur.fetchall()]
+
+            # 3. Aggregated by Call Type (Overall and Today)
+            cur.execute("""
+                SELECT
+                    api_call_type,
+                    model_name,
+                    COUNT(*) as num_calls,
+                    SUM(total_tokens) as sum_total_tokens,
+                    AVG(total_tokens)::integer as avg_total_tokens,
+                    SUM(prompt_tokens) as sum_prompt_tokens,
+                    SUM(completion_tokens) as sum_completion_tokens,
+                    COUNT(CASE WHEN DATE(timestamp) = CURRENT_DATE THEN 1 ELSE NULL END) as today_num_calls,
+                    SUM(CASE WHEN DATE(timestamp) = CURRENT_DATE THEN total_tokens ELSE 0 END) as today_sum_total_tokens
+                FROM groq_api_usage
+                GROUP BY api_call_type, model_name
+                ORDER BY api_call_type;
+            """)
+            colnames_by_type = [desc[0] for desc in cur.description]
+            rows_by_type = cur.fetchall()
+            for row_tuple in rows_by_type:
+                row_dict = dict(zip(colnames_by_type, row_tuple))
+                call_type = row_dict['api_call_type']
+                if call_type not in usage_data['by_call_type']:
+                    usage_data['by_call_type'][call_type] = []
+                usage_data['by_call_type'][call_type].append(row_dict)
+
+    except psycopg2.Error as e:
+        logger.error(f"Groq Usage Metrics: Database error: {e}", exc_info=True)
+        usage_data['error'] = f"Database error occurred: {str(e)}"
+    except Exception as e_general:
+        logger.error(f"Groq Usage Metrics: General error: {e_general}", exc_info=True)
+        usage_data['error'] = f"An unexpected error occurred: {str(e_general)}"
+
+    return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics', usage_data=usage_data)
+
 # ----------------------------------------------
 
 # --- Main Execution ---

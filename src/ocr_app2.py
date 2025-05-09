@@ -55,7 +55,7 @@ def get_persistent_state():
     """Initializes and returns a persistent state dictionary for the session."""
     logger.info("Initializing persistent state via @st.cache_resource.")
     return {
-        "history": [] # List to store {'image_file': UploadedFile, 'groq_result': str, 'tesseract_result': str}
+        "history": [] # List to store {'image_file': UploadedFile, 'groq_result': str, 'tesseract_result': str, 'car_brand': str}
     }
 
 # Get the persistent state object for this session
@@ -87,7 +87,7 @@ def clean_plate_text(raw_text: str) -> str:
 
 # --- Process with Groq ---
 def process_with_groq(image_bytes, image_media_type):
-    """Process the image with Groq Vision API."""
+    """Process the image with Groq Vision API to extract license plate."""
     try:
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
         
@@ -119,6 +119,45 @@ def process_with_groq(image_bytes, image_media_type):
         return cleaned_result
     except Exception as e:
         logger.error(f"Error processing with Groq: {str(e)}", exc_info=True)
+        return f"Error: {str(e)}"
+
+# --- Process with Groq for Car Brand Detection ---
+def detect_car_brand(image_bytes, image_media_type):
+    """Process the image with Groq Vision API to detect car brand."""
+    try:
+        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                         {
+                            "type": "text",
+                            "text": """Analyze this image and determine the exact brand/make of the car (e.g., Toyota, Honda, Ford, BMW, etc.). 
+                            
+                            Be as specific as possible by identifying both the make and model if visible (e.g., 'Toyota Camry', 'Honda Civic', 'BMW 3 Series').
+                            
+                            Provide ONLY the car brand/make and model in your response with no additional text or explanations."""
+                         },
+                         {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{image_media_type};base64,{image_base64}"
+                            }
+                         }
+                    ],
+                }
+            ],
+            model=GROQ_MODEL_NAME,
+            max_tokens=1024,
+        )
+        
+        brand_result = chat_completion.choices[0].message.content.strip()
+        logger.info(f"Car brand detection result: '{brand_result}'")
+        return brand_result
+    except Exception as e:
+        logger.error(f"Error detecting car brand with Groq: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
 # --- Process with Tesseract OCR ---
@@ -193,14 +232,16 @@ st.markdown("""
     }
     
     # .groq-card {
-    #     background-color: #f0f8ff;
-    #     border-left: 4px solid #6C5CE7;
-    # }
     
-    # .tesseract-card {
-    #     background-color: #fff8f0;
-    #     border-left: 4px solid #FFA62B;
-    # }
+    .tesseract-card {
+        background-color: #fff8f0;
+        border-left: 4px solid #FFA62B;
+    }
+    
+    .brand-card {
+        background-color: #f0fff8;
+        border-left: 4px solid #2B8A3E;
+    }
     
     .stButton>button {
         background-color: #6C5CE7;
@@ -237,10 +278,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- Header ---
-st.markdown("<div class='main-header'>🚗 License Plate OCR</div>", unsafe_allow_html=True)
+st.markdown("<div class='main-header'>🚗 License Plate OCR & Car Brand Detection</div>", unsafe_allow_html=True)
 st.markdown("""
 <div class='card'>
-    <p style='text-align: center;'>Extract license plates from images using Meta's Llama 4 Scout multi-modal model & Tesseract OCR!</p>
+    <p style='text-align: center;'>Extract license plates and identify car brands from images using Meta's Llama 4 Scout multi-modal model & Tesseract OCR!</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -283,8 +324,11 @@ with st.sidebar:
                         image_media_type = f"image/{file_ext.lstrip('.')}"
                         logger.warning(f"Using potentially unsupported image type: {image_media_type}")
                     
-                    # Process with Groq
+                    # Process with Groq for license plate OCR
                     groq_result = process_with_groq(image_bytes, image_media_type)
+                    
+                    # Process with Groq for car brand detection
+                    car_brand_result = detect_car_brand(image_bytes, image_media_type)
                     
                     # Process with Tesseract if available
                     if tesseract_available:
@@ -296,7 +340,8 @@ with st.sidebar:
                     history_entry = {
                         "image_file": uploaded_file,
                         "groq_result": groq_result,
-                        "tesseract_result": tesseract_result
+                        "tesseract_result": tesseract_result,
+                        "car_brand": car_brand_result
                     }
                     
                     persistent_state["history"].insert(0, history_entry)
@@ -340,6 +385,7 @@ else:
                 img_file = entry['image_file']
                 groq_result = entry['groq_result']
                 tesseract_result = entry.get('tesseract_result', "N/A")  # Backwards compatibility
+                car_brand = entry.get('car_brand', "N/A")  # Backwards compatibility
                 
                 with col1:
                     st.image(img_file, caption=f"Input: {img_file.name}", use_column_width=True)
@@ -357,6 +403,12 @@ else:
                     st.markdown('<div class="result-card tesseract-card">', unsafe_allow_html=True)
                     st.markdown('<p class="method-title">🔍 Tesseract OCR:</p>', unsafe_allow_html=True)
                     st.code(tesseract_result, language=None)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Car brand result card
+                    st.markdown('<div class="result-card brand-card">', unsafe_allow_html=True)
+                    st.markdown('<p class="method-title">🚙 Car Brand:</p>', unsafe_allow_html=True)
+                    st.code(car_brand, language=None)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
             except Exception as display_err:

@@ -108,11 +108,13 @@ def get_output_path(source_path=None):
     return OUTPUT_DIR / base_name
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="UNILORIN ANPR System")
+    parser = argparse.ArgumentParser(description="UNILORIN ANPR System - Image Processor")
     parser.add_argument(
         "--source",
         type=str,
-        help="Input source (image path/camera index)"
+        nargs='+',  # Accept one or more source arguments
+        required=True, # Make source mandatory
+        help="Input source(s) (image path(s)). Provide one or more file paths."
     )
     return parser.parse_args()
 
@@ -248,8 +250,8 @@ class ANPRProcessor:
         try:
             conn = self.db_pool.getconn()
             with conn.cursor() as cursor:
-                # Define table schema
-                create_table_sql = """
+                # Define table schema for detected_plates
+                create_plates_table_sql = """
                 CREATE TABLE IF NOT EXISTS detected_plates (
                     id SERIAL PRIMARY KEY,
                     start_time TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -259,19 +261,89 @@ class ANPRProcessor:
                     detection_count INTEGER,
                     vehicle_type VARCHAR(50),
                     vehicle_color VARCHAR(50),
+                    car_brand VARCHAR(100), -- New column for car brand
                     time_of_day VARCHAR(20),
                     day_of_week VARCHAR(20),
                     image_filename VARCHAR(255), -- Path to the cropped plate image
                     annotated_frame_filename VARCHAR(255) -- Path to the full annotated frame
                 );
                 """
-                cursor.execute(create_table_sql)
+                cursor.execute(create_plates_table_sql)
                 conn.commit()
-                logger.info("Table 'detected_plates' checked/created successfully.")
+                logger.info("Table 'detected_plates' checked/created successfully. Car_brand column ensured.")
+
+                # --- Check if car_brand column exists, add if not (for existing tables) ---
+                # This is a common pattern for making schema changes more robust
+                # to already existing tables from previous versions.
+                cursor.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name='detected_plates' AND column_name='car_brand';
+                """)
+                if not cursor.fetchone():
+                    logger.info("Column 'car_brand' not found in 'detected_plates', attempting to add it.")
+                    cursor.execute("ALTER TABLE detected_plates ADD COLUMN car_brand VARCHAR(100);")
+                    conn.commit()
+                    logger.info("Successfully ADDED 'car_brand' column to 'detected_plates'.")
+                else:
+                    logger.debug("Column 'car_brand' already exists in 'detected_plates'.")
+
+                # --- Define and create groq_api_usage table --- Start
+                create_usage_table_sql = """
+                CREATE TABLE IF NOT EXISTS groq_api_usage (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    api_call_type VARCHAR(50) NOT NULL,       -- e.g., 'plate_ocr', 'brand_detection'
+                    model_name VARCHAR(100) NOT NULL,         -- e.g., GROQ_MODEL_NAME
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    total_tokens INTEGER,
+                    related_detection_id INTEGER DEFAULT NULL,  -- Optional: link to detected_plates.id
+                    FOREIGN KEY (related_detection_id) REFERENCES detected_plates(id) ON DELETE SET NULL
+                );
+                """
+                cursor.execute(create_usage_table_sql)
+                conn.commit()
+                logger.info("Table 'groq_api_usage' checked/created successfully.")
+                # --- Define and create groq_api_usage table --- End
+
         except Exception as e:
-            logger.error(f"Database error during table creation: {e}", exc_info=True)
+            logger.error(f"Database error during table creation (detected_plates or groq_api_usage): {e}", exc_info=True)
             if conn:
-                conn.rollback() # Rollback in case of partial creation failure
+                conn.rollback()
+        finally:
+            if conn:
+                self.db_pool.putconn(conn)
+
+    #----------------------------------------------------------------------------------------------
+    # Helper: Log Groq API Usage to Database
+    #----------------------------------------------------------------------------------------------
+    def _log_groq_usage_to_db(self, call_type, model_name, usage_stats, related_detection_id=None):
+        """Logs Groq API token usage to the groq_api_usage table."""
+        conn = None
+        try:
+            conn = self.db_pool.getconn()
+            with conn.cursor() as cursor:
+                sql_insert = """
+                    INSERT INTO groq_api_usage
+                    (api_call_type, model_name, prompt_tokens, completion_tokens, total_tokens, related_detection_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                record = (
+                    call_type,
+                    model_name,
+                    usage_stats.prompt_tokens if usage_stats else None,
+                    usage_stats.completion_tokens if usage_stats else None,
+                    usage_stats.total_tokens if usage_stats else None,
+                    related_detection_id
+                )
+                cursor.execute(sql_insert, record)
+                conn.commit()
+                logger.debug(f"Logged Groq API usage: Type={call_type}, Model={model_name}, Tokens={usage_stats.total_tokens if usage_stats else 'N/A'}")
+        except Exception as e:
+            logger.error(f"Failed to log Groq API usage to DB: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
         finally:
             if conn:
                 self.db_pool.putconn(conn)
@@ -421,7 +493,7 @@ class ANPRProcessor:
     #     except Exception as e:
     #         logger.error(f"Unexpected error during preprocessing: {e}", exc_info=True)
     #         return None
-
+    #
     #----------------------------------------------------------------------------------------------
     # Helper: Clean Plate Text
     #----------------------------------------------------------------------------------------------
@@ -435,22 +507,20 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Helper: Process Plate with Meta's Llama 4 Scout multi-modal model
     #----------------------------------------------------------------------------------------------
-    def _process_plate_with_groq(self, plate_image):
+    def _process_plate_with_groq(self, plate_image, related_detection_id=None):
         """Encodes plate image and calls Groq Vision API for OCR."""
         try:
-            # Encode image to JPEG format in memory (suitable for Groq)
-            # Use high quality JPEG encoding
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
             is_success, buffer = cv2.imencode(".jpg", plate_image, encode_param)
             if not is_success:
                 logger.error("Failed to encode plate image to JPEG for Groq.")
-                return "" # Return empty string on encoding failure
+                return ""
 
             image_bytes = buffer.tobytes()
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-            image_media_type = 'image/jpeg' # Since we encoded to JPEG
+            image_media_type = 'image/jpeg'
 
-            logger.debug(f"Sending image (approx {len(image_base64)} base64 chars) to Groq model: {self.groq_model_name}")
+            logger.debug(f"Sending image (approx {len(image_base64)} base64 chars) to Groq model for PLATE OCR: {self.groq_model_name}")
 
             chat_completion = self.groq_client.chat.completions.create(
                 messages=[
@@ -461,12 +531,12 @@ class ANPRProcessor:
                                 "type": "text",
                                 "text": "Analyze the license plate image. Extract ONLY the 8 alphanumeric characters (A-Z, 0-9) representing the plate number. Output MUST be exactly 8 characters long and in ALL UPPERCASE. Remove any hyphens, spaces, or symbols. Respond with ONLY the 8-character plate string (e.g., ABC123XY). NO other text, explanation, or formatting."
                             },
-                             {
+                            {
                                 "type": "image_url",
                                 "image_url": {
                                     "url": f"data:{image_media_type};base64,{image_base64}"
                                 }
-                             }
+                            }
                         ],
                     }
                 ],
@@ -474,45 +544,96 @@ class ANPRProcessor:
                 max_tokens=30,
             )
 
+            # Log usage
+            if hasattr(chat_completion, 'usage') and chat_completion.usage:
+                self._log_groq_usage_to_db('plate_ocr', self.groq_model_name, chat_completion.usage, related_detection_id)
+            else:
+                logger.warning("Groq chat_completion response did not include usage statistics for plate_ocr.")
+
             raw_ocr_result = chat_completion.choices[0].message.content
-            # Use the internal cleaning function
             cleaned_result = self._clean_plate_text(raw_ocr_result)
-            logger.info(f"Groq raw result: '{raw_ocr_result}', Cleaned result: '{cleaned_result}'")
+            logger.info(f"Groq raw result for PLATE: '{raw_ocr_result}', Cleaned result: '{cleaned_result}'")
             return cleaned_result
 
         except Exception as e:
-            # Catch potential Groq API errors (rate limits, auth issues, etc.)
-            logger.error(f"Error processing with Groq Vision API: {str(e)}", exc_info=True)
-            return "" # Return empty string on API error
+            logger.error(f"Error processing PLATE with Groq Vision API: {str(e)}", exc_info=True)
+            # Optionally log a failed API call attempt here if needed, though without token counts
+            # self._log_groq_usage_to_db('plate_ocr_failed', self.groq_model_name, None, related_detection_id)
+            return ""
+
+    #----------------------------------------------------------------------------------------------
+    # Helper: Detect Car Brand with Groq
+    #----------------------------------------------------------------------------------------------
+    def _detect_car_brand_with_groq(self, image_to_process, related_detection_id=None):
+        """Encodes an image and calls Groq Vision API to detect car brand and model."""
+        try:
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+            is_success, buffer = cv2.imencode(".jpg", image_to_process, encode_param)
+            if not is_success:
+                logger.error("Failed to encode image to JPEG for Groq car brand detection.")
+                return "Unknown"
+
+            image_bytes = buffer.tobytes()
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            image_media_type = 'image/jpeg'
+
+            logger.debug(f"Sending image for CAR BRAND detection to Groq model: {self.groq_model_name}")
+
+            chat_completion = self.groq_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": """Analyze this image and determine the exact brand/make of the car (e.g., Toyota, Honda, Ford, BMW, etc.).
+
+                            Be as specific as possible by identifying both the make and model if visible (e.g., 'Toyota Camry', 'Honda Civic', 'BMW 3 Series').
+
+                            Provide ONLY the car brand/make and model in your response with no additional text or explanations. If unknown, respond 'Unknown'.
+                            """
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{image_media_type};base64,{image_base64}"}
+                            }
+                        ],
+                    }
+                ],
+                model=self.groq_model_name,
+                max_tokens=50
+            )
+
+            # Log usage
+            if hasattr(chat_completion, 'usage') and chat_completion.usage:
+                self._log_groq_usage_to_db('brand_detection', self.groq_model_name, chat_completion.usage, related_detection_id)
+            else:
+                logger.warning("Groq chat_completion response did not include usage statistics for brand_detection.")
+
+            brand_result = chat_completion.choices[0].message.content.strip()
+            if not brand_result or len(brand_result) > 100:
+                logger.warning(f"Groq car brand detection returned an unusual result: '{brand_result}'. Defaulting to Unknown.")
+                return "Unknown"
+
+            logger.info(f"Groq car brand detection result: '{brand_result}'")
+            return brand_result
+
+        except Exception as e:
+            logger.error(f"Error detecting car brand with Groq Vision API: {str(e)}", exc_info=True)
+            # self._log_groq_usage_to_db('brand_detection_failed', self.groq_model_name, None, related_detection_id)
+            return "Unknown"
 
     #----------------------------------------------------------------------------------------------
     # OCR License Plate
     #----------------------------------------------------------------------------------------------
-    def ocr_license_plate(self, image):
+    def ocr_license_plate(self, image, related_detection_id=None):
         """Perform OCR on license plate image using Groq Vision."""
         try:
-            # --- Skip Preprocessing for Groq --- Start
-            # Preprocessing might not be necessary or even detrimental for advanced vision models.
-            # We will send the original cropped image directly.
-            # processed = self.preprocess_plate(image)
-            # if processed is None:
-            #     logger.warning("Preprocessing failed, attempting Groq OCR on original image.")
-            #     image_to_ocr = image # Fallback to original image
-            # else:
-            #     logger.debug("Using preprocessed image for Groq OCR.")
-            #     image_to_ocr = processed
-            #     # Ensure preprocessed image is suitable for encoding
-            #     if len(image_to_ocr.shape) == 2: # Check if it's grayscale
-            #         image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
-            #     elif len(image_to_ocr.shape) == 3 and image_to_ocr.shape[2] == 1: # Check if single channel 3D
-            #         image_to_ocr = cv2.cvtColor(image_to_ocr, cv2.COLOR_GRAY2BGR)
-
             logger.debug("Sending original cropped plate image to Groq OCR.")
-            image_to_ocr = image # Use the original image
-            # --- Skip Preprocessing for Groq --- End
+            image_to_ocr = image
 
-            # Call Groq helper
-            cleaned_plate = self._process_plate_with_groq(image_to_ocr)
+            # Call Groq helper, passing related_detection_id if available
+            cleaned_plate = self._process_plate_with_groq(image_to_ocr, related_detection_id)
 
             if not cleaned_plate:
                 logger.warning("Groq OCR did not return a valid plate string.")
@@ -599,94 +720,71 @@ class ANPRProcessor:
         """
         if not detections:
             logger.info("No plates to save.")
-            return False # Return False as nothing was saved
+            return False
 
-        # Convert list to dictionary when needed
-        if isinstance(detections, list):
-            # Convert the list to a dictionary with plate_text as the key
-            detection_dict = {}
-            for detection in detections:
-                plate_text = detection.get('plate_text', '')
-                if plate_text:
-                    # Set first_seen and last_seen timestamps
-                    current_time = time.time()
-                    detection['first_seen'] = current_time
-                    detection['last_seen'] = current_time
-                    detection['detection_count'] = 1
-                    # Use plate_text as key and rename plate_confidence for consistency
-                    detection['plate_confidence'] = detection.get('plate_confidence', 0.0)
-                    detection_dict[plate_text] = detection
-            detections = detection_dict
+        logger.info(f"Found {len(detections)} potential plates to process for DB:")
+        for det_data in detections:
+            logger.info(f"  Plate: {det_data.get('plate_text', 'N/A')}, "
+                        f"Confidence: {det_data.get('plate_confidence', 0.0):.2f}, "
+                        f"Vehicle: {det_data.get('vehicle_type', 'N/A')}, "
+                        f"Color: {det_data.get('vehicle_color', 'N/A')}, "
+                        f"Brand: {det_data.get('car_brand', 'N/A')}")
 
-        logger.info(f"Found {len(detections)} potential plates:")
-        for plate, data in detections.items():
-            logger.info(f"  Plate: {plate}, Confidence: {data['plate_confidence']:.2f}, "
-                      f"Vehicle: {data['vehicle_type']}, Color: {data['vehicle_color']}")
-
-        # Track filtered plates for debugging
         color_filtered = []
         confidence_filtered = []
-        detection_filtered = []
-
-        filtered_plates = {}
-        for plate, data in detections.items():
-            # Check each filter condition separately for better logging
-            if data.get('vehicle_color', '').lower() == 'unknown':
-                color_filtered.append(plate)
+        valid_detections_for_db = []
+        for det_data in detections:
+            plate_text = det_data.get('plate_text', '')
+            if not plate_text:
+                logger.warning(f"Skipping detection with no plate text: {det_data}")
                 continue
 
-            if data['detection_count'] < MIN_DETECTIONS:
-                detection_filtered.append(plate)
+            if det_data.get('vehicle_color', '').lower() == 'unknown':
+                color_filtered.append(plate_text)
+
+            if det_data.get('plate_confidence', 0.0) < MIN_CONFIDENCE:
+                confidence_filtered.append(plate_text)
                 continue
 
-            # Use global MIN_CONFIDENCE
-            if data['plate_confidence'] < MIN_CONFIDENCE:
-                confidence_filtered.append(plate)
-                continue
+            valid_detections_for_db.append(det_data)
 
-            # If we get here, all filters passed
-            filtered_plates[plate] = data
-
-        # Log detailed filtering results
         if color_filtered:
-            logger.warning(f"Filtered out {len(color_filtered)} plates due to unknown vehicle color: {color_filtered}")
+            logger.info(f"Note: {len(color_filtered)} plates had 'unknown' vehicle color (still processed for DB): {color_filtered}")
         if confidence_filtered:
             logger.warning(f"Filtered out {len(confidence_filtered)} plates due to low confidence (<{MIN_CONFIDENCE}): {confidence_filtered}")
-        if detection_filtered:
-            logger.warning(f"Filtered out {len(detection_filtered)} plates due to low detection count (<{MIN_DETECTIONS}): {detection_filtered}")
 
-        if not filtered_plates:
-            logger.warning("All plates filtered out due to validation (color, count, confidence).")
-            return False # Return False as nothing was saved
+        if not valid_detections_for_db:
+            logger.warning("No valid detections left after filtering for DB save.")
+            return False
 
-        # Modified to allow duplicates at different times by removing session-level deduplication
-        logger.info(f"Preparing to save {len(filtered_plates)} valid plates to database")
+        logger.info(f"Preparing to save {len(valid_detections_for_db)} valid detections to database")
 
         conn = None
-        saved_successfully = False # Flag to track success
+        saved_successfully = False
         try:
             conn = self.db_pool.getconn()
-            conn.autocommit = False  # Explicit transaction control
+            conn.autocommit = False
 
             with conn.cursor() as cursor:
-                # Prepare records including the image filename
                 records_to_insert = []
-                for plate, data in filtered_plates.items():
-                    # Ensure time_details is available
+                for data in valid_detections_for_db:
                     time_details = data.get('time_details')
                     if not time_details:
-                        logger.warning(f"Skipping plate {plate} due to missing time_details.")
+                        logger.warning(f"Skipping plate {data.get('plate_text')} due to missing time_details.")
                         continue
+
+                    now_iso = datetime.now().isoformat()
 
                     records_to_insert.append(
                         (
-                            datetime.fromtimestamp(data['first_seen']).isoformat(),
-                            datetime.fromtimestamp(data['last_seen']).isoformat(),
-                            plate,
+                            now_iso,
+                            now_iso,
+                            data['plate_text'],
                             data['plate_confidence'],
-                            data['detection_count'],
+                            1,
                             data['vehicle_type'],
                             data['vehicle_color'],
+                            data.get('car_brand', 'Unknown'),
                             time_details.get('time_of_day'),
                             time_details.get('day_of_week'),
                             data.get('image_filename'),
@@ -694,69 +792,71 @@ class ANPRProcessor:
                         )
                     )
 
-                # Insert all records - allow duplicates (just ensure they're unique within this batch)
-                if records_to_insert:
-                    final_unique_records = []
-                    seen_plates_in_batch = set()
-                    for record in records_to_insert:
-                        plate_str = record[2] # License plate
-                        if plate_str not in seen_plates_in_batch:
-                            final_unique_records.append(record)
-                            seen_plates_in_batch.add(plate_str)
-                        else:
-                            # Find existing record to potentially update image if current is better?
-                            # For now, simpler: just log the duplicate within the batch.
-                            logger.warning(f"Duplicate plate '{plate_str}' detected within save batch. Keeping first instance.")
+                if not records_to_insert:
+                    logger.info("No records prepared for DB insertion after final checks.")
+                    return False # Early exit if no records
 
-                    if not final_unique_records:
-                        logger.info("No unique records left after final batch deduplication.")
-                        return saved_successfully # Return the success flag
+                logger.info(f"Inserting {len(records_to_insert)} records into DB.")
 
-                    logger.info(f"Inserting {len(final_unique_records)} unique records into DB.")
-
-                    # Modified SQL - Add the new column
-                    sql_insert = """
-                        INSERT INTO detected_plates
-                        (start_time, end_time, license_plate, confidence, detection_count,
-                         vehicle_type, vehicle_color, time_of_day, day_of_week, image_filename,
-                         annotated_frame_filename)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """
-                    # No ON CONFLICT clause to allow duplicates at different times
-
-                    cursor.executemany(sql_insert, final_unique_records)
-
-                    conn.commit()
-                    rows_affected = cursor.rowcount
-                    logger.info(f"Database commit successful. Rows affected: {rows_affected}")
-                    if rows_affected > 0:
-                        saved_successfully = True # Set flag if rows were affected
+                sql_insert = """
+                    INSERT INTO detected_plates
+                    (start_time, end_time, license_plate, confidence, detection_count,
+                     vehicle_type, vehicle_color, car_brand, time_of_day, day_of_week, image_filename,
+                     annotated_frame_filename)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                cursor.executemany(sql_insert, records_to_insert)
+                conn.commit()
+                rows_affected = cursor.rowcount
+                logger.info(f"Database commit successful. Rows affected: {rows_affected}")
+                if rows_affected > 0:
+                    saved_successfully = True
 
         except Exception as e:
-            logger.error(f"Database error: {str(e)}")
+            logger.error(f"Database error: {str(e)}", exc_info=True)
             if conn:
                 conn.rollback()
-            saved_successfully = False # Ensure flag is false on error
+            saved_successfully = False
         finally:
             if conn:
                 self.db_pool.putconn(conn)
 
-        return saved_successfully # Return the success flag
+        return saved_successfully
 
     #----------------------------------------------------------------------------------------------
     # Process Image
     #----------------------------------------------------------------------------------------------
-    def process_image(self, frame): # Renamed method
+    def process_image(self, frame):
         """Process a single image"""
-        processed_detections = [] # Collect detections for this image
+        processed_detections = []
+        car_brand_overall = "Unknown" # Initialize here
         try:
-            # Get timestamp details once for the image
             time_details = self.get_time_details()
-
-            # Detect vehicles
             vehicles = self.detect_vehicle_type(frame)
 
-            # Detect license plates
+            image_for_brand_detection = frame
+            if vehicles:
+                largest_vehicle_roi = None
+                max_area = 0
+                for v_info in vehicles:
+                    v_box = v_info['box']
+                    v_area = (v_box[2] - v_box[0]) * (v_box[3] - v_box[1])
+                    if v_area > max_area:
+                        max_area = v_area
+                        largest_vehicle_roi = frame[v_box[1]:v_box[3], v_box[0]:v_box[2]]
+                if largest_vehicle_roi is not None and largest_vehicle_roi.size > 0:
+                    image_for_brand_detection = largest_vehicle_roi
+                    logger.info("Using largest vehicle ROI for car brand detection.")
+                else:
+                    logger.info("No suitable vehicle ROI found, using full frame for car brand detection.")
+            else:
+                logger.info("No vehicles detected, using full frame for car brand detection.")
+
+            if image_for_brand_detection.size > 0:
+                car_brand_overall = self._detect_car_brand_with_groq(image_for_brand_detection, None)
+            else:
+                logger.warning("Image for brand detection is empty.")
+
             results = self.model.predict(frame, conf=MIN_CONFIDENCE, verbose=False)
 
             for result in results:
@@ -766,48 +866,42 @@ class ANPRProcessor:
 
                 for box, conf in zip(boxes, confidences):
                     x1, y1, x2, y2 = map(int, box)
-
-                    # Crop the detected plate region and run OCR
                     plate_img = frame[y1:y2, x1:x2]
 
                     if plate_img is None or plate_img.size == 0:
                         logger.warning(f"Skipping empty plate image crop at box: {(x1, y1, x2, y2)}")
                         continue
 
-                    plate_text, plate_conf = self.ocr_license_plate(plate_img)
+                    plate_text, plate_conf = self.ocr_license_plate(plate_img, None)
                     logger.info(f"OCR result: '{plate_text}' with confidence {plate_conf:.2f}")
 
                     if plate_text and plate_conf >= MIN_CONFIDENCE:
-                        # Determine vehicle type and color
                         vehicle_type = "unknown"
                         vehicle_color = "unknown"
-                        # Basic association: find the vehicle bounding box that contains the plate center
+
                         plate_center_x = (x1 + x2) / 2
                         plate_center_y = (y1 + y2) / 2
                         associated_vehicle = None
                         min_area = float('inf')
 
                         for v in vehicles:
-                            vx1, vy1, vx2, vy2 = v['box']
-                            # Check if plate center is inside vehicle box
-                            if vx1 <= plate_center_x <= vx2 and vy1 <= plate_center_y <= vy2:
-                                area = (vx2 - vx1) * (vy2 - vy1)
-                                # Choose the smallest enclosing vehicle box
+                            vx1_v, vy1_v, vx2_v, vy2_v = v['box']
+                            if vx1_v <= plate_center_x <= vx2_v and vy1_v <= plate_center_y <= vy2_v:
+                                area = (vx2_v - vx1_v) * (vy2_v - vy1_v)
                                 if area < min_area:
                                     min_area = area
                                     associated_vehicle = v
 
                         if associated_vehicle:
-                             v = associated_vehicle
-                             vehicle_type = v['type']
-                             vx1, vy1, vx2, vy2 = v['box']
-                             vehicle_roi = frame[vy1:vy2, vx1:vx2]
-                             if vehicle_roi.size > 0: # Ensure ROI is valid
-                                 vehicle_color = self.predict_vehicle_color(vehicle_roi)
+                             v_assoc = associated_vehicle
+                             vehicle_type = v_assoc['type']
+                             vx1_assoc, vy1_assoc, vx2_assoc, vy2_assoc = v_assoc['box']
+                             vehicle_roi_color = frame[vy1_assoc:vy2_assoc, vx1_assoc:vx2_assoc]
+                             if vehicle_roi_color.size > 0:
+                                 vehicle_color = self.predict_vehicle_color(vehicle_roi_color)
                              else:
-                                 logger.warning("Could not extract valid vehicle ROI for color prediction.")
+                                 logger.warning("Could not extract valid vehicle ROI for color prediction for an associated vehicle.")
 
-                        # --- Save the cropped plate image ---
                         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
                         image_filename = f"{plate_text}_{timestamp_str}.jpg"
                         save_path = PLATE_IMAGE_DIR / image_filename
@@ -815,33 +909,32 @@ class ANPRProcessor:
                         try:
                             success = cv2.imwrite(str(save_path), plate_img)
                             if success:
-                                saved_image_path = image_filename # Store relative path
+                                saved_image_path = image_filename
                                 logger.info(f"Saved detected plate image: {image_filename}")
                             else:
                                 logger.warning(f"Failed to save plate image: {save_path}")
                         except Exception as img_save_error:
                             logger.error(f"Error saving plate image {save_path}: {img_save_error}", exc_info=True)
-                        # -----------------------------------
 
-                        # Collect detection details instead of updating tracker
                         detection_data = {
                             'plate_text': plate_text,
                             'plate_confidence': plate_conf,
                             'vehicle_type': vehicle_type,
                             'vehicle_color': vehicle_color,
-                            'time_details': time_details, # Timestamp for the whole image processing
-                            'image_filename': saved_image_path, # Path to the saved *plate* image
-                            'bounding_box': (x1, y1, x2, y2) # Store box for potential drawing/filtering
+                            'car_brand': car_brand_overall,
+                            'time_details': time_details,
+                            'image_filename': saved_image_path,
+                            'bounding_box': (x1, y1, x2, y2)
                         }
                         processed_detections.append(detection_data)
 
-                        # Draw bounding box and OCR annotation on the frame
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.putText(frame, f"{plate_text} ({plate_conf:.2f})",
                                     (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.7, (0, 255, 0), 2)
+
         except Exception as e:
-            logger.error(f"Error processing image: {e}", exc_info=True) # Added exc_info
+            logger.error(f"Error processing image: {e}", exc_info=True)
 
         # --- Display the result in a window - auto-close after 5 seconds with no key press required ---
         try:
@@ -934,28 +1027,50 @@ class ANPRProcessor:
 #----------------------------------------------------------------------------------------------
 def main():
     args = parse_arguments()
-    # Validate source is not a digit (camera index) for image mode
-    if args.source.isdigit():
-        logger.error("Camera index detected. This script is for image processing only. Use an image file path for --source.")
-        sys.exit(1) # Exit if source is a camera index
 
-    logger.info(f"Starting ANPR image processing system with source: {args.source}")
-    processor = ANPRProcessor()
+    # Validate sources
+    valid_sources = []
+    if not args.source: # Should not happen due to required=True, but good check
+        logger.error("No source image(s) provided. Use --source <path1> [<path2> ...]")
+        sys.exit(1)
+
+    for src_path_str in args.source:
+        if src_path_str.isdigit():
+            logger.error(f"Camera index '{src_path_str}' detected. This script is for image processing only. Please provide image file paths.")
+            # Continue to check other sources, but at least one error means we might exit later
+            # For now, we'll just skip this one and try to process others if any.
+        elif not Path(src_path_str).is_file():
+            logger.error(f"Source is not a file or does not exist: {src_path_str}")
+        else:
+            valid_sources.append(src_path_str)
+
+    if not valid_sources:
+        logger.error("No valid image file sources found to process after validation.")
+        sys.exit(1)
+
+    logger.info(f"Starting ANPR image processing system for {len(valid_sources)} source(s): {valid_sources}")
+    processor = None # Initialize processor to None for finally block
     try:
-        # Directly process the image source
-        processor.process_image_source(args.source)
+        processor = ANPRProcessor()
+        for idx, source_image_path in enumerate(valid_sources):
+            logger.info(f"--- Processing image {idx + 1} of {len(valid_sources)}: {source_image_path} ---")
+            try:
+                processor.process_image_source(source_image_path)
+            except Exception as e_process_single:
+                # Log error for this specific image but continue with the next ones
+                logger.error(f"Failed to process image '{source_image_path}': {str(e_process_single)}", exc_info=True)
+            logger.info(f"--- Finished processing image {idx + 1} of {len(valid_sources)}: {source_image_path} ---")
+
     except KeyboardInterrupt:
         logger.info("Shutting down due to KeyboardInterrupt...")
-    except Exception as e:
-        # Log general errors during setup or processing not caught inside process_image_source
-        logger.error(f"Image processing failed: {str(e)}", exc_info=True)
+    except Exception as e_main:
+        logger.error(f"Main ANPR processing loop failed: {str(e_main)}", exc_info=True)
     finally:
-        # Ensure pool is closed even if processor initialization fails
         if hasattr(processor, 'db_pool') and processor.db_pool:
             processor.db_pool.closeall()
             logger.info("Database connections closed.")
         else:
-            logger.warning("Processor or DB pool not fully initialized, skipping closeall.")
+            logger.warning("Processor or DB pool not fully initialized, or already closed. Skipping closeall.")
 
 if __name__ == "__main__":
     main()

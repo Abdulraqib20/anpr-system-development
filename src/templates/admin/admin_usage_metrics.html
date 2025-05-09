@@ -1,0 +1,199 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head_extra %}
+{{ super() }}
+<style>
+    .stat-card {
+        border-left: 5px solid var(--bs-primary);
+        transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    }
+    .stat-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 .3rem .8rem rgba(0,0,0,.1)!important;
+    }
+    .stat-card .card-title {
+        font-size: 1.1rem;
+        font-weight: 500;
+        color: var(--bs-secondary-color);
+    }
+    .stat-card .card-text {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--bs-body-color);
+    }
+    .table-sm th, .table-sm td {
+        padding: 0.4rem;
+    }
+    .model-name-badge {
+        font-size: 0.8em;
+        font-weight: normal;
+    }
+    .note-text {
+        font-size: 0.9rem;
+        color: var(--bs-secondary-color);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h2"><i class="bi bi-graph-up-arrow me-2"></i>Groq API Usage Metrics</h1>
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> Back to Admin Dashboard
+        </a>
+    </div>
+
+    {% if usage_data.error %}
+        <div class="alert alert-danger" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i> <strong>Error:</strong> {{ usage_data.error }}
+        </div>
+    {% endif %}
+
+    <!-- Summary Statistics -->
+    <div class="row mb-4 g-3">
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm">
+                <div class="card-body text-center">
+                    <h6 class="card-title mb-1">Total Calls (Overall)</h6>
+                    <p class="card-text mb-0">{{ usage_data.summary_stats.total_calls | default(0) }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm">
+                <div class="card-body text-center">
+                    <h6 class="card-title mb-1">Total Tokens (Overall)</h6>
+                    <p class="card-text mb-0">{{ usage_data.summary_stats.grand_total_tokens | default(0) }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm">
+                <div class="card-body text-center">
+                    <h6 class="card-title mb-1">Total Calls (Today)</h6>
+                    <p class="card-text mb-0">{{ usage_data.summary_stats.today_total_calls | default(0) }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card shadow-sm">
+                <div class="card-body text-center">
+                    <h6 class="card-title mb-1">Total Tokens (Today)</h6>
+                    <p class="card-text mb-0">{{ usage_data.summary_stats.today_total_tokens | default(0) }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <p class="note-text mb-4">
+        <i class="bi bi-info-circle"></i> <strong>Note:</strong> These metrics reflect recorded API calls made by the ANPR system.
+        "Tokens" are units of text processing by the AI model. This data helps monitor usage but does not directly show remaining quotas or exact rate limit status from Groq, as this might not be available for the current model tier.
+        High request volumes might indicate proximity to Groq's usage limits.
+    </p>
+
+    <!-- Usage by Call Type -->
+    <div class="card mb-4 shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-tags-fill me-2"></i>Usage by API Call Type</h5>
+        </div>
+        <div class="card-body p-0">
+            {% if usage_data.by_call_type %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped table-hover mb-0">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Call Type</th>
+                                <th>Model Name</th>
+                                <th class="text-end">Total Calls</th>
+                                <th class="text-end">Total Tokens</th>
+                                <th class="text-end">Avg Tokens/Call</th>
+                                <th class="text-end">Calls Today</th>
+                                <th class="text-end">Tokens Today</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for call_type, type_stats_list in usage_data.by_call_type.items() %}
+                            {% for stats in type_stats_list %}
+                            <tr>
+                                <td>{{ stats.api_call_type | replace('_', ' ') | title }}</td>
+                                <td><span class="badge bg-secondary model-name-badge">{{ stats.model_name }}</span></td>
+                                <td class="text-end">{{ stats.num_calls | default(0) }}</td>
+                                <td class="text-end">{{ stats.sum_total_tokens | default(0) }}</td>
+                                <td class="text-end">{{ stats.avg_total_tokens | default(0) }}</td>
+                                <td class="text-end">{{ stats.today_num_calls | default(0) }}</td>
+                                <td class="text-end">{{ stats.today_sum_total_tokens | default(0) }}</td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="7" class="text-center text-muted py-3">No usage data aggregated by call type yet.</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-center p-3 text-muted">
+                    No usage data aggregated by call type available.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Recent API Calls -->
+    <div class="card shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Recent API Calls (Last 20)</h5>
+        </div>
+        <div class="card-body p-0">
+            {% if usage_data.recent_calls %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped table-hover mb-0">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Call Type</th>
+                                <th>Model</th>
+                                <th class="text-end">Prompt Tokens</th>
+                                <th class="text-end">Completion Tokens</th>
+                                <th class="text-end">Total Tokens</th>
+                                <th class="text-end">Detection ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for call in usage_data.recent_calls %}
+                            <tr>
+                                <td>{{ call.timestamp.strftime('%Y-%m-%d %H:%M:%S') if call.timestamp else 'N/A' }}</td>
+                                <td>{{ call.api_call_type | replace('_', ' ') | title }}</td>
+                                <td><span class="badge bg-secondary model-name-badge">{{ call.model_name }}</span></td>
+                                <td class="text-end">{{ call.prompt_tokens | default('N/A') }}</td>
+                                <td class="text-end">{{ call.completion_tokens | default('N/A') }}</td>
+                                <td class="text-end">{{ call.total_tokens | default('N/A') }}</td>
+                                <td class="text-end">
+                                    {% if call.related_detection_id %}
+                                        <a href="{{ url_for('index', search=call.related_detection_id) }}#detection-id-{{ call.related_detection_id }}" title="View Detection">{{ call.related_detection_id }}</a>
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% else %}
+                            <tr>
+                                <td colspan="7" class="text-center text-muted py-3">No recent API calls recorded.</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="text-center p-3 text-muted">
+                    No recent API calls recorded.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+</div>
+{% endblock %}

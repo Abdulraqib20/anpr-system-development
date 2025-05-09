@@ -87,11 +87,11 @@
     <div class="card-body">
         <form id="uploadForm" enctype="multipart/form-data">
             <div class="mb-3">
-                <label for="imageFile" class="form-label">Select Image File (JPEG, PNG, BMP):</label>
-                <input class="form-control" type="file" id="imageFile" name="imageFile" accept=".jpg, .jpeg, .png, .bmp" required>
+                <label for="imageFile" class="form-label">Select Image File(s) (JPEG, PNG, BMP):</label>
+                <input class="form-control" type="file" id="imageFile" name="imageFile" accept=".jpg, .jpeg, .png, .bmp" required multiple>
             </div>
             <button type="submit" id="uploadButton" class="btn btn-primary">
-                <i class="bi bi-cloud-arrow-up-fill"></i> Upload & Process
+                <i class="bi bi-cloud-arrow-up-fill"></i> Upload & Process Selected
             </button>
             <button type="button" id="cancelUploadButton" class="btn btn-secondary" style="display: none;">
                 <i class="bi bi-x-circle"></i> Cancel
@@ -199,6 +199,14 @@
                     <option value="Sunday">Sunday</option>
                 </select>
             </div>
+            <div class="col-md-3"> {# New filter for Car Brand #}
+                <label for="filterCarBrand" class="form-label small mb-1">Car Brand</label>
+                <select id="filterCarBrand" class="form-select form-select-sm">
+                    <option value="">All Brands</option>
+                    {# Options will be populated by JS or use a predefined list #}
+                    {# Example: <option value="Toyota">Toyota</option> #}
+                </select>
+            </div>
         </div>
         {# --- End Enhanced Filter Controls --- #}
 
@@ -227,6 +235,7 @@
                         <th class="sortable" data-column-key="confidence" data-column-type="number"><i class="bi bi-check-circle"></i> Conf.</th>
                         <th class="sortable" data-column-key="vehicle_type" data-column-type="string"><i class="bi bi-truck-front"></i> Vehicle</th>
                         <th class="sortable" data-column-key="vehicle_color" data-column-type="string"><i class="bi bi-palette"></i> Color</th>
+                        <th class="sortable" data-column-key="car_brand" data-column-type="string"><i class="bi bi-award"></i> Brand</th>
                         <th class="sortable" data-column-key="time_of_day" data-column-type="string"><i class="bi bi-clock"></i> Time</th>
                         <th class="sortable" data-column-key="day_of_week" data-column-type="string"><i class="bi bi-calendar-week"></i> Day</th>
                         <th class="sortable" data-column-key="start_time" data-column-type="datetime"><i class="bi bi-clock-history"></i> First Seen</th>
@@ -333,6 +342,7 @@
                     <li class="list-group-item"><strong>Confidence:</strong> <span id="modalConfidence"></span>%</li>
                     <li class="list-group-item"><strong>Vehicle Type:</strong> <span id="modalVehicleType"></span></li>
                     <li class="list-group-item"><strong>Vehicle Color:</strong> <span id="modalVehicleColor"></span></li>
+                    <li class="list-group-item"><strong>Car Brand:</strong> <span id="modalCarBrand"></span></li>
                     <li class="list-group-item"><strong>First Seen:</strong> <span id="modalFirstSeen"></span></li>
                     <li class="list-group-item"><strong>Last Seen:</strong> <span id="modalLastSeen"></span></li>
                     <li class="list-group-item"><strong>Time of Day:</strong> <span id="modalTimeOfDay"></span></li>
@@ -401,6 +411,7 @@
     const filterVehicleColor = document.getElementById('filterVehicleColor'); // New filter
     const filterTimeOfDay = document.getElementById('filterTimeOfDay'); // New filter
     const filterDayOfWeek = document.getElementById('filterDayOfWeek'); // New filter
+    const filterCarBrand = document.getElementById('filterCarBrand'); // New Car Brand filter
     const todayDetectionsStat = document.getElementById('todayDetectionsStat'); // Added reference for today's stat
 
     // Upload related DOM Elements
@@ -454,9 +465,9 @@
     }
 
     function formatTitle(text) {
-         if (text == null || text === '') return '-'; // Handle null or empty
+         if (text == null || text === '' || text.toLowerCase() === 'unknown') return '-'; // Handle null, empty, or "unknown"
          // Basic title case
-         return String(text).charAt(0).toUpperCase() + String(text).slice(1).toLowerCase();
+         return String(text).split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
     }
 
     // --- Rendering Functions ---\n
@@ -500,9 +511,9 @@
             row.dataset.timeOfDay = formatTitle(det.time_of_day);
             row.dataset.dayOfWeek = det.day_of_week || 'N/A';
             row.dataset.plateImage = det.image_filename ? `${PLATE_IMAGE_URL_BASE}${det.image_filename}` : '';
-            // Use the new field directly if available, otherwise keep the placeholder
             row.dataset.annotatedImage = det.annotated_frame_filename ? `${ANNOTATED_IMAGE_URL_BASE}${det.annotated_frame_filename}` : STATIC_PLACEHOLDER_URL;
-            row.dataset.detectionId = det.id; // Assuming your API provides the detection ID
+            row.dataset.detectionId = det.id;
+            row.dataset.carBrand = det.car_brand || 'N/A';
 
             let actionsHtml = '';
             if (current_user_is_admin) { // This variable will be set in the script tag
@@ -523,6 +534,7 @@
                 <td>${formatConfidence(det.confidence)}</td>
                 <td>${formatTitle(det.vehicle_type)}</td>
                 <td>${formatVehicleColor(det.vehicle_color)}</td>
+                <td>${formatTitle(det.car_brand)}</td>
                 <td>${formatTitle(det.time_of_day)}</td>
                 <td>${det.day_of_week || '-'}</td>
                 <td>${formatDate(det.start_time)}</td>
@@ -630,6 +642,7 @@
         const selectedColor = filterVehicleColor ? filterVehicleColor.value : '';
         const selectedTime = filterTimeOfDay ? filterTimeOfDay.value : '';
         const selectedDay = filterDayOfWeek ? filterDayOfWeek.value : '';
+        const selectedBrand = filterCarBrand ? filterCarBrand.value : '';
 
         // Filter
         filteredDetections = allDetections.filter(det => {
@@ -638,8 +651,9 @@
             const colorMatch = !selectedColor || (det.vehicle_color && det.vehicle_color.toLowerCase() === selectedColor.toLowerCase());
             const timeMatch = !selectedTime || (det.time_of_day && det.time_of_day.toLowerCase() === selectedTime.toLowerCase());
             const dayMatch = !selectedDay || (det.day_of_week && det.day_of_week.toLowerCase() === selectedDay.toLowerCase());
+            const brandMatch = !selectedBrand || (det.car_brand && det.car_brand.toLowerCase() === selectedBrand.toLowerCase());
 
-            return plateMatch && typeMatch && colorMatch && timeMatch && dayMatch;
+            return plateMatch && typeMatch && colorMatch && timeMatch && dayMatch && brandMatch;
         });
 
         // Sort
@@ -708,14 +722,15 @@
     const modalLastSeen = document.getElementById('modalLastSeen');
     const modalTimeOfDay = document.getElementById('modalTimeOfDay');
     const modalDayOfWeek = document.getElementById('modalDayOfWeek');
+    const modalCarBrand = document.getElementById('modalCarBrand');
 
     function attachModalListener(row) {
-         if (!detectionModal || !row) return; // Don't attach if modal or row doesn't exist
+         if (!detectionModal || !row) return;
          row.addEventListener('click', function() {
             // Safely access data attributes
             const plate = this.dataset.plate || 'N/A';
             const plateImage = this.dataset.plateImage || '';
-            const annotatedImage = this.dataset.annotatedImage || ''; // Use the potentially constructed URL
+            const annotatedImage = this.dataset.annotatedImage || '';
 
             if (modalTitleCode) modalTitleCode.textContent = plate;
 
@@ -736,6 +751,7 @@
             if(modalLastSeen) modalLastSeen.textContent = formatDate(this.dataset.lastSeen) || 'N/A';
             if(modalTimeOfDay) modalTimeOfDay.textContent = this.dataset.timeOfDay || 'N/A';
             if(modalDayOfWeek) modalDayOfWeek.textContent = this.dataset.dayOfWeek || 'N/A';
+            if(modalCarBrand) modalCarBrand.textContent = formatTitle(this.dataset.carBrand) || 'N/A';
 
             detectionModal.show();
         });
@@ -802,7 +818,7 @@
 
                     // --- Calculate and Update Today's Detections --- Start
                     if (todayDetectionsStat) {
-                        const today = new Date().toISOString().split('T')[0]; // Get YYYY-MM-DD for today
+                        const today = new Date().toISOString().split('T')[0];
                         let countToday = 0;
                         allDetections.forEach(det => {
                             if (det.end_time && det.end_time.startsWith(today)) {
@@ -813,6 +829,26 @@
                         console.log(`Calculated today's detections: ${countToday}`);
                     }
                     // --- Calculate and Update Today's Detections --- End
+
+                    // --- Populate Car Brand Filter --- Start
+                    if (filterCarBrand) {
+                        const uniqueBrands = [...new Set(allDetections.map(det => det.car_brand).filter(brand => brand && brand.toLowerCase() !== 'unknown'))]
+                                            .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+                        // Preserve current selection if still valid, otherwise reset
+                        const currentFilterValue = filterCarBrand.value;
+                        filterCarBrand.innerHTML = '<option value="">All Brands</option>'; // Reset
+                        uniqueBrands.forEach(brand => {
+                            const option = document.createElement('option');
+                            option.value = brand;
+                            option.textContent = formatTitle(brand);
+                            filterCarBrand.appendChild(option);
+                        });
+                        if (uniqueBrands.includes(currentFilterValue)) {
+                            filterCarBrand.value = currentFilterValue;
+                        }
+                    }
+                    // --- Populate Car Brand Filter --- End
 
                     // Re-apply filters and sorting to the new data and render
                     applyFilterAndSort();
@@ -846,121 +882,168 @@
     }
 
     // --- Upload Handling ---
-    function showUploadResult(type, message) {
-        uploadResult.className = `alert alert-${type}`; // 'success', 'danger', 'info'
-        uploadResult.textContent = message;
+    function showUploadResult(type, message, append = false) {
+        uploadResult.className = `alert alert-${type} mt-2`; // Ensure margin
+        if (append) {
+            const newMessage = document.createElement('div');
+            newMessage.innerHTML = message; // Use innerHTML to allow for icons or simple HTML in message
+            uploadResult.appendChild(newMessage);
+        } else {
+            uploadResult.innerHTML = message; // Use innerHTML
+        }
         uploadResult.style.display = 'block';
-         // Auto-hide after 5 seconds
-         setTimeout(() => {
-             if (uploadResult.style.display === 'block') { // Check if still visible
-                 uploadResult.style.display = 'none';
-             }
-         }, 5000);
+        // Auto-hide general info/success after a delay, errors might persist longer or require manual close
+        if (type === 'info' || type === 'success' && !append) {
+            setTimeout(() => {
+                if (uploadResult.style.display === 'block' && uploadResult.innerHTML === message) {
+                    uploadResult.style.display = 'none';
+                    uploadResult.innerHTML = '';
+                }
+            }, 7000);
+        }
     }
 
     function resetUploadUI(clearFile = true) {
-        if (clearFile && imageFile) imageFile.value = ''; // Clear the file input
-        if (uploadButton) uploadButton.disabled = false;
+        if (clearFile && imageFile) imageFile.value = '';
+        if (uploadButton) {
+            uploadButton.disabled = false;
+            uploadButton.innerHTML = '<i class="bi bi-cloud-arrow-up-fill"></i> Upload & Process Selected';
+        }
         if (cancelUploadButton) cancelUploadButton.style.display = 'none';
         if (uploadProgressContainer) uploadProgressContainer.style.height = '0';
-        if (uploadProgressBar) uploadProgressBar.style.width = '0%';
+        if (uploadProgressBar) {
+            uploadProgressBar.style.width = '0%';
+            uploadProgressBar.classList.remove('bg-success', 'bg-danger'); // Reset color
+            uploadProgressBar.textContent = '';
+        }
         if (uploadStatus) uploadStatus.textContent = '';
-         // Keep the result message visible for a while (handled by showUploadResult timeout)
+        // Do not clear uploadResult here, showUploadResult handles its visibility or it might show aggregate results
     }
 
-    function handleUploadSubmit(event) {
+    async function handleUploadSubmit(event) { // Made async for sequential processing
         event.preventDefault();
         if (!imageFile || !imageFile.files || imageFile.files.length === 0) {
-            showUploadResult('warning', 'Please select an image file first.');
+            showUploadResult('warning', 'Please select one or more image files first.');
             return;
         }
 
-        const file = imageFile.files[0];
-        const formData = new FormData();
-        formData.append('imageFile', file);
-        formData.append('csrf_token', raw_csrf_token_value); // Add CSRF token to FormData
+        const files = imageFile.files;
+        const totalFiles = files.length;
 
-        // Show progress UI
         uploadButton.disabled = true;
-        cancelUploadButton.style.display = 'inline-block'; // Show cancel button
-        uploadResult.style.display = 'none'; // Hide previous result
-        uploadProgressContainer.style.height = 'auto'; // Expand container
+        uploadButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...';
+        cancelUploadButton.style.display = 'inline-block';
+        uploadResult.style.display = 'none'; // Hide previous results
+        uploadResult.innerHTML = ''; // Clear previous results
+        uploadProgressContainer.style.height = 'auto';
         uploadProgressBar.style.width = '0%';
-        uploadProgressBar.classList.add('progress-bar-animated');
-        uploadStatus.textContent = 'Uploading...';
+        uploadProgressBar.classList.remove('bg-success', 'bg-danger');
+        uploadProgressBar.textContent = '';
+        uploadStatus.textContent = `Starting upload of ${totalFiles} file(s).`;
 
-        currentXhr = new XMLHttpRequest();
+        let overallSuccess = true;
+        let filesProcessed = 0;
 
-        currentXhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-                const percentComplete = Math.round((e.loaded / e.total) * 100);
-                uploadProgressBar.style.width = percentComplete + '%';
-                 if (percentComplete < 100) {
-                    uploadStatus.textContent = `Uploading... ${percentComplete}%`;
-                 } else {
-                    // --- Enhanced Status Update --- Start
-                    uploadStatus.textContent = 'Upload complete. Processing image...';
-                    // --- Enhanced Status Update --- End
-                    uploadProgressBar.classList.remove('progress-bar-animated');
-                 }
-            }
-        });
+        for (let i = 0; i < totalFiles; i++) {
+            const file = files[i];
+            const formData = new FormData();
+            formData.append('imageFile', file);
+            formData.append('csrf_token', raw_csrf_token_value);
 
-        currentXhr.addEventListener('load', () => {
-             // --- Update Status Before Parsing Response --- Start
-             if (uploadStatus) uploadStatus.textContent = 'Processing complete. Analyzing response...';
-             // --- Update Status Before Parsing Response --- End
+            uploadStatus.textContent = `Uploading file ${i + 1} of ${totalFiles}: ${file.name}`;
+            uploadProgressBar.style.width = '0%';
+            uploadProgressBar.classList.remove('bg-success', 'bg-danger');
+            uploadProgressBar.textContent = '';
 
-             if (currentXhr.status >= 200 && currentXhr.status < 300) {
-                try {
-                    const response = JSON.parse(currentXhr.responseText);
-                    if (response.success) {
-                        showUploadResult('success', response.message || 'Image processed successfully. Table will refresh shortly.');
-                        // Trigger data refresh after successful upload
-                        fetchAndUpdateData(true); // Pass true to show update notification
-                    } else {
-                         // Provide more specific error feedback
-                         let errorMsg = `Processing failed: ${response.error || 'Unknown error'}`;
-                         if (response.error && response.error.includes("ANPR system is not ready")) {
-                            errorMsg = "Processing failed: The ANPR system is not ready or encountered an initialization error. Please check server logs.";
-                         } else if (response.error && response.error.includes("File type not allowed")) {
-                            errorMsg = "Processing failed: Invalid file type. Please upload JPEG, PNG, or BMP images.";
-                         }
-                        showUploadResult('danger', errorMsg);
-                    }
-                } catch (parseError) {
-                     console.error("Error parsing upload response:", parseError, "Response text:", currentXhr.responseText);
-                     showUploadResult('danger', 'Error parsing server response. Check console for details.');
+            try {
+                currentXhr = new XMLHttpRequest(); // Create a new XHR for each file
+                const responseText = await new Promise((resolve, reject) => {
+                    currentXhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable) {
+                            const percentComplete = Math.round((e.loaded / e.total) * 100);
+                            uploadProgressBar.style.width = percentComplete + '%';
+                            uploadProgressBar.textContent = percentComplete + '%';
+                            if (percentComplete < 100) {
+                                uploadStatus.textContent = `Uploading ${file.name} (${i+1}/${totalFiles}): ${percentComplete}%`;
+                            } else {
+                                uploadStatus.textContent = `Processing ${file.name} (${i+1}/${totalFiles})...`;
+                                uploadProgressBar.classList.remove('progress-bar-animated');
+                            }
+                        }
+                    };
+
+                    currentXhr.onload = () => {
+                        if (currentXhr.status >= 200 && currentXhr.status < 300) {
+                            resolve(currentXhr.responseText);
+                        } else {
+                            reject({ status: currentXhr.status, statusText: currentXhr.statusText, responseText: currentXhr.responseText });
+                        }
+                    };
+                    currentXhr.onerror = () => reject({ status: 0, statusText: 'Network error' });
+                    currentXhr.onabort = () => reject({ status: 0, statusText: 'Upload aborted by user' });
+
+                    currentXhr.open('POST', UPLOAD_URL, true);
+                    currentXhr.send(formData);
+                });
+
+                filesProcessed++;
+                uploadProgressBar.classList.add('bg-success');
+                uploadProgressBar.textContent = 'Done';
+                const response = JSON.parse(responseText);
+                if (response.success) {
+                    showUploadResult('success', `<i class="bi bi-check-circle-fill"></i> Successfully processed: ${file.name}. ${response.message || ''}`, true);
+                } else {
+                    overallSuccess = false;
+                    showUploadResult('danger', `<i class="bi bi-exclamation-triangle-fill"></i> Failed to process: ${file.name}. Error: ${response.error || 'Unknown error'}`, true);
                 }
-            } else {
-                 console.error("Upload failed with status:", currentXhr.status, "Response:", currentXhr.responseText);
-                 // Give slightly more context for common errors
-                 let failMsg = `Upload failed: ${currentXhr.statusText || 'Server error'} (Status: ${currentXhr.status})`;
-                 if (currentXhr.status === 500) {
-                     failMsg += ". A server-side error occurred during processing. Check server logs.";
-                 }
-                 showUploadResult('danger', failMsg);
+
+            } catch (errorObj) {
+                filesProcessed++;
+                overallSuccess = false;
+                uploadProgressBar.classList.add('bg-danger');
+                uploadProgressBar.textContent = 'Failed';
+                let errorMsg = `Error with ${file.name}: `;
+                if (errorObj.statusText === 'Upload aborted by user') {
+                    errorMsg = `Upload cancelled for ${file.name}.`;
+                    showUploadResult('warning', `<i class="bi bi-slash-circle-fill"></i> ${errorMsg}`, true);
+                    // If one is cancelled, stop processing further files
+                    uploadStatus.textContent = `Upload process cancelled after ${filesProcessed} of ${totalFiles} files.`;
+                    break;
+                } else if (errorObj.status === 0) { // Network error
+                    errorMsg += 'Network error or server unavailable.';
+                } else { // HTTP error from server
+                    errorMsg += `Server error ${errorObj.status || ''}: ${errorObj.statusText || ''}. `;
+                    try {
+                         const errResp = JSON.parse(errorObj.responseText);
+                         errorMsg += errResp.error || '';
+                    } catch (e) { /* no json response */ }
+                }
+                showUploadResult('danger', `<i class="bi bi-exclamation-triangle-fill"></i> ${errorMsg}`, true);
             }
-            resetUploadUI();
             currentXhr = null;
-        });
+             // Brief pause before next file for readability, if not cancelled
+             if (filesProcessed < totalFiles && errorObj && errorObj.statusText !== 'Upload aborted by user') {
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
 
-        currentXhr.addEventListener('error', () => {
-            console.error("Upload network error occurred.");
-            showUploadResult('danger', 'Upload failed: Could not connect to the server or network error occurred.');
-            resetUploadUI();
-            currentXhr = null;
-        });
+        // Final UI update after all files are attempted
+        if (filesProcessed === totalFiles) {
+            uploadStatus.textContent = `Finished processing ${totalFiles} file(s).`;
+        } else if (currentXhr === null) { // Loop was broken by cancel
+             // Message already set by abort handler
+        } else {
+             uploadStatus.textContent = `Processed ${filesProcessed} of ${totalFiles} file(s).`;
+        }
 
-        currentXhr.addEventListener('abort', () => {
-            console.log("Upload cancelled by user.");
-            showUploadResult('warning', 'Upload cancelled.');
-            resetUploadUI();
-            currentXhr = null;
-        });
+        if (overallSuccess && filesProcessed === totalFiles) {
+            // showUploadResult('success', 'All files processed successfully. Table will refresh.', true);
+        } else if (filesProcessed > 0) {
+            // showUploadResult('warning', 'Some files had issues. See details above.', true);
+        }
 
-        currentXhr.open('POST', UPLOAD_URL, true);
-        currentXhr.send(formData);
+        fetchAndUpdateData(true); // Refresh data table regardless of individual errors
+        resetUploadUI(true); // Clear file input after all uploads are done
     }
 
     function handleUploadCancel() {
@@ -1073,14 +1156,14 @@
         // Add search listener (client-side filtering)
         if (searchInput) {
              let filterTimeout = null;
-             searchInput.addEventListener('input', () => { // Use 'input' for better responsiveness
+             searchInput.addEventListener('input', () => {
                  clearTimeout(filterTimeout);
-                 filterTimeout = setTimeout(applyFilterAndSort, 300); // Apply filter after 300ms pause
+                 filterTimeout = setTimeout(applyFilterAndSort, 300);
              });
         }
 
         // Add change listeners for new filter dropdowns
-        [filterVehicleType, filterVehicleColor, filterTimeOfDay, filterDayOfWeek].forEach(selectElement => {
+        [filterVehicleType, filterVehicleColor, filterTimeOfDay, filterDayOfWeek, filterCarBrand].forEach(selectElement => {
             if (selectElement) {
                 selectElement.addEventListener('change', applyFilterAndSort);
             }
