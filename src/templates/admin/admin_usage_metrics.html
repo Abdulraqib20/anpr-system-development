@@ -93,6 +93,60 @@
         High request volumes might indicate proximity to Groq's usage limits.
     </p>
 
+    <!-- Rate Limit Information & Current Status -->
+    <div class="card mb-4 shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Groq API Rate Limits & Status ({{ usage_data.recent_calls[0].model_name if usage_data.recent_calls else "meta-llama/llama-4-scout-17b-16e-instruct" }})</h5>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-8">
+                    <p class="fw-bold mb-2">Current Model Limits:</p>
+                    <ul class="list-unstyled mb-3 small">
+                        <li><strong>Requests Per Minute (RPM):</strong> 30</li>
+                        <li><strong>Requests Per Day (RPD):</strong> 1,000</li>
+                        <li><strong>Tokens Per Minute (TPM):</strong> 30,000</li>
+                        <li><strong>Context Window:</strong> 131,072 tokens</li>
+                        <li><strong>Max Completion Tokens:</strong> 8,192 tokens per call</li>
+                    </ul>
+                    <p class="small text-muted">
+                        <i class="bi bi-info-circle"></i> The "Tokens Per Minute" (TPM) includes both prompt and completion tokens.
+                        The "Recent API Calls" table below can help gauge if you are approaching the RPM limit.
+                    </p>
+                </div>
+                <div class="col-md-4">
+                    {% set daily_requests_limit = 1000 %}
+                    {% set daily_tokens_limit_tpm_equivalent = 30000 * 60 * 24 %} {# This is not a direct daily limit, RPD is more relevant #}
+                    {% set today_calls = usage_data.summary_stats.today_total_calls | default(0) %}
+                    {% set today_tokens = usage_data.summary_stats.today_total_tokens | default(0) %}
+
+                    {% set remaining_requests_today = daily_requests_limit - today_calls %}
+                    {% set requests_today_percentage = (today_calls / daily_requests_limit * 100) if daily_requests_limit > 0 else 0 %}
+
+                    <p class="fw-bold mb-1">Daily Usage Status (vs RPD):</p>
+                    <div class="progress mb-2" style="height: 20px;">
+                        <div class="progress-bar {% if requests_today_percentage > 85 %}bg-danger{% elif requests_today_percentage > 60 %}bg-warning{% else %}bg-success{% endif %}"
+                             role="progressbar"
+                             style="width: {{ requests_today_percentage }}%;"
+                             aria-valuenow="{{ requests_today_percentage }}"
+                             aria-valuemin="0" aria-valuemax="100">
+                             {{ "%.1f" | format(requests_today_percentage) }}%
+                        </div>
+                    </div>
+                    <p class="small mb-0">
+                        Requests Today: <strong>{{ today_calls }} / {{ daily_requests_limit }}</strong>
+                        (Remaining: <strong>{{ remaining_requests_today if remaining_requests_today > 0 else 0 }}</strong>)
+                    </p>
+                    <p class="small text-muted">
+                        Tokens Today: <strong>{{ today_tokens }}</strong>
+                        (Note: TPM is the primary token rate limit, RPD for requests).
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- End Rate Limit Information -->
+
     <!-- Usage by Call Type -->
     <div class="card mb-4 shadow-sm">
         <div class="card-header">
