@@ -8,9 +8,22 @@
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
     body, html {
+        background: linear-gradient(-45deg, #8E2DE2, #4A00E0, #6a11cb, #2575fc);
+        background-size: 400% 400%;
+        animation: gradientBG 10s ease infinite;
+        background-attachment: fixed; /* Keep background fixed during scroll */
+        overflow-y: auto; /* Enable scrolling on body */
+        scrollbar-width: none; /* Hide scrollbar in Firefox */
+        -ms-overflow-style: none; /* Hide scrollbar in IE and Edge */
+
         height: 100%;
         margin: 0;
-        font-family: 'Poppins', sans-serif;
+        font-family: 'Poppins', sans-serif; /* Apply Poppins to the whole page */
+    }
+
+    /* Hide scrollbar for Chrome, Safari and Opera */
+    body::-webkit-scrollbar {
+        display: none;
     }
 
     .register-page-container { /* Renamed for clarity */
@@ -20,9 +33,6 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
-        background-size: 400% 400%;
-        animation: gradientBG 15s ease infinite;
         padding: 2rem;
         position: relative;
         overflow-y: auto; /* This will allow scrolling if the card + credit overflows */
