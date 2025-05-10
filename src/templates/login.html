@@ -15,13 +15,14 @@
 
     .login-page-container {
         min-height: 100vh;
+        width: 100%; /* Ensure full width */
         display: flex;
         flex-direction: column; /* Ensure items stack vertically */
         align-items: center;
         justify-content: center;
         background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
         background-size: 400% 400%;
-        animation: gradientBG 15s ease infinite;
+        animation: gradientBG 10s ease infinite;
         padding: 2rem; /* Uniform padding, helps on small screens */
         position: relative;
         overflow-y: auto; /* Allow scrolling if content overflows on small screens */
@@ -101,13 +102,14 @@
     }
 
     .btn-login {
-        background: linear-gradient(90deg, #e73c7e, #23a6d5);
+    
         border: none;
         padding: 0.8rem 1.5rem;
         font-weight: 600;
         letter-spacing: 0.5px;
         text-transform: uppercase;
         border-radius: 10px;
+        color: #ffffff;
         transition: all 0.3s ease;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
     }
@@ -153,21 +155,23 @@
         /* left: 50%; */
         /* transform: translateX(-50%); */
         text-align: center;
-        font-size: 0.85rem;
-        color: rgba(255, 255, 255, 0.7);
+        font-size: 0.9rem; /* Slightly increased font size */
+        color: rgba(255, 255, 255, 0.85); /* Increased opacity for better visibility */
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); /* Subtle shadow for legibility */
         width: 100%; /* Take full width for centering */
-        padding: 10px 0; /* Add some vertical padding */
+        padding: 15px 0; /* Adjusted vertical padding */
         margin-top: auto; /* Pushes to bottom if login-page-container is flex-column */
+        margin-bottom: 0; /* Ensure it's snug at the bottom of the container's padding */
         z-index: 10;
     }
     .developer-credit-login a {
-        color: rgba(255, 255, 255, 0.9);
+        color: #ffffff; /* Brighter link color */
         font-weight: 500;
         text-decoration: none;
     }
     .developer-credit-login a:hover {
         text-decoration: underline;
-        color: #fff;
+        filter: brightness(1.1); /* Slight brightness on hover */
     }
     .developer-credit-login .bi-github {
         font-size: 1.2rem;
@@ -185,7 +189,7 @@
 <div class="login-page-container">
     <div class="login-card">
         <div class="card-header text-center">
-            <h4><i class="bi bi-shield-lock-fill me-2"></i>ANPR Intel Login</h4>
+            <h4><i class="bi bi-shield-lock-fill me-2"></i>ANPR System Login</h4>
         </div>
         <div class="card-body">
             {% with messages = get_flashed_messages(with_categories=true) %}
