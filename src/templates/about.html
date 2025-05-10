@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 
-{% block title %}About - ANPR Intel System{% endblock %}
+{% block title %}About - ANPR System{% endblock %}
 
 {% block head_extra %}
 {{ super() }}
@@ -11,8 +11,8 @@
     }
 
     .about-page-content {
-        padding-top: 2rem;
-        padding-bottom: 4rem;
+        padding-top: 0.1rem;
+        padding-bottom: 0.1rem;
     }
 
     .about-header-v2 {
@@ -50,13 +50,13 @@
 
     .section-heading { /* Renamed from section-title for clarity */
         text-align: center;
-        margin-top: 4rem;
-        margin-bottom: 3rem;
+        margin-top: 1rem;
+        margin-bottom: 1rem;
         font-size: 2.5rem; /* Increased size */
         font-weight: 600;
         color: var(--bs-emphasis-color);
         position: relative;
-        padding-bottom: 0.75rem;
+        /* padding-bottom: 0.75rem; */
     }
 
     .section-heading::after {
@@ -249,11 +249,11 @@
                 <div class="row align-items-center">
                     <div class="col-lg-7 mb-4 mb-lg-0">
                         <p class="text-muted mb-4" style="font-size: 1.05rem; line-height: 1.8;">
-                            The <strong>ANPR Intel System</strong> is a sophisticated solution leveraging the power of Artificial Intelligence
-                            for advanced vehicle identification and security management. Developed as a capstone project at the
-                            University of Ilorin, this system integrates cutting-edge computer vision with modern web technologies
+                            The <strong>AI-Powered Automatic Number Plate Recognition (ANPR) System</strong> is a sophisticated solution leveraging the power of Artificial Intelligence
+                            for advanced vehicle identification and security management. Developed as a capstone final-year project at the
+                            University of Ilorin, this system integrates Artificial Intelligence and cutting-edge computer vision with modern web technologies
                             to deliver a robust, scalable, and user-friendly platform for automated license plate recognition and
-                            vehicle attribute analysis (like brand detection).
+                            vehicle attribute analysis including type and brand detection.
                         </p>
                         <div class="timeline">
                             <div class="timeline-point">
@@ -264,7 +264,7 @@
                             <div class="timeline-point">
                                 <div class="timeline-icon"><i class="bi bi-tools"></i></div>
                                 <h5>Technology Backbone</h5>
-                                <p>Powered by Python, Flask, YOLOv8 for object detection, Groq API with Llama models for lightning-fast OCR & car brand detection, OpenCV for image processing, and PostgreSQL for reliable data persistence. The frontend is built with Bootstrap 5 and dynamic JavaScript.</p>
+                                <p>Powered by Python, Flask, YOLOv8 for object detection, Meta's Llama Vision models via Groq API for lightning-fast optical character recognition & car brand detection, OpenCV for image processing, and PostgreSQL for reliable data persistence. The frontend is built with Bootstrap 5 and dynamic JavaScript.</p>
                             </div>
                             <div class="timeline-point">
                                 <div class="timeline-icon"><i class="bi bi-shield-lock-fill"></i></div>
@@ -290,7 +290,7 @@
                                     <span class="badge text-bg-info">PostgreSQL</span>
                                     <span class="badge text-bg-warning">OpenCV</span>
                                     <span class="badge text-dark" style="background-color: #00ff9d;">Groq API</span>
-                                    <span class="badge text-bg-danger">Llama Models</span>
+                                    <span class="badge text-bg-danger">Large Vision Models</span>
                                     <span class="badge text-bg-light">Bootstrap 5</span>
                                     <span class="badge text-bg-dark">JavaScript</span>
                                 </div>
@@ -315,8 +315,8 @@
             <div class="col-lg-4 col-md-6 mb-4">
                 <div class="feature-card-v2">
                     <div class="icon"><i class="bi bi-lightning-charge-fill"></i></div>
-                    <h5>Ultra-Fast Groq OCR</h5>
-                    <p>Utilizes Groq's LPU Inference Engine with Llama models for near-instantaneous and reliable character recognition.</p>
+                    <h5>Ultra-Fast Llama Vision OCR</h5>
+                    <p>Utilizes Groq's LPU Inference Engine with Meta's Llama Vision models for near-instantaneous and reliable character recognition.</p>
                 </div>
             </div>
             <div class="col-lg-4 col-md-6 mb-4">
@@ -371,17 +371,17 @@
         </div>
     </section>
 
-    <section class="acknowledgments-section text-center py-5 mt-0">
+    <!-- <section class="acknowledgments-section text-center py-5 mt-0">
         <div class="container">
             <h2 class="section-heading">Acknowledgments</h2>
             <p class="text-muted mx-auto" style="max-width: 700px; font-size: 1.05rem;">
                 This project was made possible through the invaluable guidance of the academic staff at the
                 Department of Computer Engineering, University of Ilorin. Special thanks to
-                [Supervisor's Name/Department, if applicable] for their mentorship.
+                Engr Femi Adebayo for their mentorship.
                 The open-source community and the developers of the various libraries and tools used also deserve immense gratitude.
             </p>
         </div>
-    </section>
+    </section> -->
 
 </div>
 {% endblock %}
