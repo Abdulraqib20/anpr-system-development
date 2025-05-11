@@ -972,10 +972,16 @@ def admin_usage_metrics():
         'error': None
     }
 
+    # Define pricing rates - these can be adjusted as needed
+    pricing_rates = {
+        # 'per_request': 2.00,  # $2 per request
+        'per_token': 0.001      # $0.001 per token
+    }
+
     if not conn:
         usage_data['error'] = "Database connection not available."
         logger.error("Groq Usage Metrics: Database connection not available.")
-        return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics', usage_data=usage_data)
+        return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics', usage_data=usage_data, pricing_rates=pricing_rates)
 
     try:
         with conn.cursor() as cur:
@@ -1039,8 +1045,9 @@ def admin_usage_metrics():
         logger.error(f"Groq Usage Metrics: General error: {e_general}", exc_info=True)
         usage_data['error'] = f"An unexpected error occurred: {str(e_general)}"
 
-    return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics', usage_data=usage_data)
-
+    # Pass both usage_data and pricing_rates to the template
+    return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics',
+                          usage_data=usage_data, pricing_rates=pricing_rates)
 # ----------------------------------------------
 
 # --- Main Execution ---

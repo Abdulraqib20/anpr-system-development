@@ -34,6 +34,18 @@
         font-size: 0.9rem;
         color: var(--bs-secondary-color);
     }
+    /* Additional styles for pricing section */
+    .pricing-card {
+        border-left: 5px solid var(--bs-success);
+    }
+    .pricing-info {
+        font-size: 0.85rem;
+        color: var(--bs-secondary-color);
+    }
+    .pricing-value {
+        font-weight: 700;
+        color: var(--bs-success);
+    }
 </style>
 {% endblock %}
 
@@ -87,6 +99,55 @@
             </div>
         </div>
     </div>
+
+    <!-- BEGIN PRICING SECTION - You can comment out this entire block if pricing is not needed -->
+    <div class="row mb-4 g-3">
+        <div class="col-12">
+            <div class="card pricing-card shadow-sm">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-currency-dollar me-2"></i>Cost Analysis</h5>
+                    <span class="pricing-info">
+                        <i class="bi bi-info-circle"></i> Current rate: ${{ pricing_rates.per_token | default(0.0001) }} per token
+                    </span>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="card shadow-sm">
+                                <div class="card-body text-center">
+                                    <h6 class="card-title mb-1">Cost of Tokens (Overall)</h6>
+                                    {% set token_cost = (usage_data.summary_stats.grand_total_tokens | default(0)) * (pricing_rates.per_token | default(0.0001)) %}
+                                    <p class="card-text pricing-value mb-0">${{ "%.2f"|format(token_cost) }}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card shadow-sm">
+                                <div class="card-body text-center">
+                                    <h6 class="card-title mb-1">Cost of Tokens (Today)</h6>
+                                    {% set today_token_cost = (usage_data.summary_stats.today_total_tokens | default(0)) * (pricing_rates.per_token | default(0.0001)) %}
+                                    <p class="card-text pricing-value mb-0">${{ "%.2f"|format(today_token_cost) }}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card shadow-sm">
+                                <div class="card-body text-center">
+                                    <h6 class="card-title mb-1">Average Cost Per Call</h6>
+                                    {% set avg_token_cost = (usage_data.summary_stats.grand_total_tokens | default(0)) * (pricing_rates.per_token | default(0.0001)) %}
+                                    {% set total_calls = usage_data.summary_stats.total_calls | default(1) %}
+                                    {% set avg_cost = avg_token_cost / total_calls if total_calls > 0 else 0 %}
+                                    <p class="card-text pricing-value mb-0">${{ "%.2f"|format(avg_cost) }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- END PRICING SECTION -->
+
     <p class="note-text mb-4">
         <i class="bi bi-info-circle"></i> <strong>Note:</strong> These metrics reflect recorded API calls made by the ANPR system.
         "Tokens" are units of text processing by the AI model. This data helps monitor usage but does not directly show remaining quotas or exact rate limit status from Groq, as this might not be available for the current model tier.
@@ -165,6 +226,9 @@
                                 <th class="text-end">Avg Tokens/Call</th>
                                 <th class="text-end">Calls Today</th>
                                 <th class="text-end">Tokens Today</th>
+                                <!-- BEGIN PRICING COLUMN - Comment out this th tag if pricing is not needed -->
+                                <th class="text-end">Est. Cost ($)</th>
+                                <!-- END PRICING COLUMN -->
                             </tr>
                         </thead>
                         <tbody>
@@ -178,11 +242,17 @@
                                 <td class="text-end">{{ stats.avg_total_tokens | default(0) }}</td>
                                 <td class="text-end">{{ stats.today_num_calls | default(0) }}</td>
                                 <td class="text-end">{{ stats.today_sum_total_tokens | default(0) }}</td>
+                                <!-- BEGIN PRICING COLUMN - Comment out this td tag if pricing is not needed -->
+                                <td class="text-end">
+                                    {% set type_token_cost = (stats.sum_total_tokens | default(0)) * (pricing_rates.per_token | default(0.0001)) %}
+                                    <span class="pricing-value">{{ "%.2f"|format(type_token_cost) }}</span>
+                                </td>
+                                <!-- END PRICING COLUMN -->
                             </tr>
                             {% endfor %}
                         {% else %}
                             <tr>
-                                <td colspan="7" class="text-center text-muted py-3">No usage data aggregated by call type yet.</td>
+                                <td colspan="8" class="text-center text-muted py-3">No usage data aggregated by call type yet.</td>
                             </tr>
                         {% endfor %}
                         </tbody>
@@ -214,6 +284,9 @@
                                 <th class="text-end">Completion Tokens</th>
                                 <th class="text-end">Total Tokens</th>
                                 <th class="text-end">Detection ID</th>
+                                <!-- BEGIN PRICING COLUMN - Comment out this th tag if pricing is not needed -->
+                                <th class="text-end">Est. Cost ($)</th>
+                                <!-- END PRICING COLUMN -->
                             </tr>
                         </thead>
                         <tbody>
@@ -232,10 +305,16 @@
                                         -
                                     {% endif %}
                                 </td>
+                                <!-- BEGIN PRICING COLUMN - Comment out this td tag if pricing is not needed -->
+                                <td class="text-end">
+                                    {% set call_token_cost = (call.total_tokens | default(0)) * (pricing_rates.per_token | default(0.0001)) %}
+                                    <span class="pricing-value">{{ "%.2f"|format(call_token_cost) }}</span>
+                                </td>
+                                <!-- END PRICING COLUMN -->
                             </tr>
                         {% else %}
                             <tr>
-                                <td colspan="7" class="text-center text-muted py-3">No recent API calls recorded.</td>
+                                <td colspan="8" class="text-center text-muted py-3">No recent API calls recorded.</td>
                             </tr>
                         {% endfor %}
                         </tbody>
