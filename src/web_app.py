@@ -975,7 +975,7 @@ def admin_usage_metrics():
     # Define pricing rates - these can be adjusted as needed
     pricing_rates = {
         # 'per_request': 2.00,  # $2 per request
-        'per_token': 0.001      # $0.001 per token
+        'per_token': 0.0013      # $0.0013 per token
     }
 
     if not conn:
