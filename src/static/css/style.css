@@ -5,16 +5,20 @@ body {
     flex-direction: column;
     min-height: 100vh;
     /* Add padding top to prevent content from hiding behind fixed navbar */
-    padding-top: 70px; /* Adjust based on actual navbar height */
+    padding-top: 70px;
+    /* Adjust based on actual navbar height */
 }
 
 main {
-    flex: 1; /* Allows main content to grow and push footer down */
+    flex: 1;
+    /* Allows main content to grow and push footer down */
 }
 
 .footer {
-    flex-shrink: 0; /* Prevent footer from shrinking */
-    margin-top: auto; /* Push footer to the bottom */
+    flex-shrink: 0;
+    /* Prevent footer from shrinking */
+    margin-top: auto;
+    /* Push footer to the bottom */
     padding: 0.75rem 0;
     font-size: 0.9em;
 }
@@ -39,12 +43,14 @@ main {
 }
 
 .display-4 {
-    font-size: 3rem; /* Slightly smaller display size */
+    font-size: 3rem;
+    /* Slightly smaller display size */
     font-weight: 300;
 }
 
 .display-4 .bi {
-    font-size: 2.5rem; /* Adjust icon size within display */
+    font-size: 2.5rem;
+    /* Adjust icon size within display */
     margin-right: 0.5rem;
     vertical-align: middle;
 }
@@ -53,23 +59,28 @@ main {
 .table code {
     /* Rely on theme styling for code elements */
     /* Removed specific color, background, weight */
-    padding: 0.2em 0.4em; /* Keep padding */
-    border-radius: 0.25rem; /* Keep border-radius */
+    padding: 0.2em 0.4em;
+    /* Keep padding */
+    border-radius: 0.25rem;
+    /* Keep border-radius */
 }
 
 .badge {
     font-size: 0.9em;
     padding: 0.4em 0.6em;
-    border: 1px solid rgba(0,0,0,0.1); /* Keep subtle border for light badges? Or remove? Let's keep for now. */
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    /* Keep subtle border for light badges? Or remove? Let's keep for now. */
 }
 
 .table-hover tbody tr:hover {
-    background-color: rgba(0, 0, 0, 0.04); /* Subtle hover effect */
+    background-color: rgba(0, 0, 0, 0.04);
+    /* Subtle hover effect */
 }
 
 .table thead th {
     vertical-align: middle;
-    white-space: nowrap; /* Prevent headers from wrapping */
+    white-space: nowrap;
+    /* Prevent headers from wrapping */
 }
 
 .table tbody td {
@@ -77,21 +88,145 @@ main {
 }
 
 .table .progress {
-    margin-bottom: 0; /* Remove default margin below progress bars in table */
+    margin-bottom: 0;
+    /* Remove default margin below progress bars in table */
 }
 
 /* Center align specific columns if desired */
 /* Keep this commented out unless needed */
 /*
-.table td:nth-child(4) { */ /* Views column */
+.table td:nth-child(4) { */
+/* Views column */
 /*    text-align: center;
 }
 */
 
 /* Adjust column widths if necessary (example) */
 /* Keep commented out */
-/* 
-.table th:nth-child(1), .table td:nth-child(1) { width: 15%; } */ /* License Plate */
-/* .table th:nth-child(2), .table td:nth-child(2) { width: 20%; } */ /* Last Seen */
+/*
+.table th:nth-child(1), .table td:nth-child(1) { width: 15%; } */
+/* License Plate */
+/* .table th:nth-child(2), .table td:nth-child(2) { width: 20%; } */
+/* Last Seen */
 /* ... etc ... */
- 
+
+/* --- Enhanced Detected Plate Gallery --- */
+.plate-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    /* Responsive columns, min 200px */
+    gap: 1rem;
+    /* Spacing between items */
+}
+
+.plate-gallery-item {
+    position: relative;
+    /* For overlay positioning */
+    display: block;
+    /* Ensure <a> tag behaves like a block for layout */
+    overflow: hidden;
+    /* Clip content like overlays */
+    border-radius: 0.375rem;
+    /* Match Bootstrap's card border-radius */
+    border: 1px solid var(--bs-border-color-translucent);
+    /* Added subtle border */
+    background-color: var(--bs-tertiary-bg);
+    /* Use a subtle background for the item area */
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    /* Bootstrap's default shadow-sm */
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    text-decoration: none;
+    /* Remove underline from link */
+}
+
+.plate-gallery-item:hover {
+    transform: translateY(-5px) scale(1.02);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    /* Bootstrap's default shadow */
+}
+
+.plate-gallery-item img {
+    display: block;
+    width: 100%;
+    height: auto;
+    /* Let image determine its height initially */
+    aspect-ratio: 4/3;
+    /* Maintain a consistent aspect ratio for visual rhythm */
+    object-fit: cover;
+    /* Cover the area, cropping if necessary */
+    border-bottom: 1px solid var(--bs-border-color-translucent);
+    /* Subtle border if caption is outside */
+    transition: transform 0.3s ease;
+}
+
+/* Optional: Slight zoom on image itself on hover, if desired */
+/*
+.plate-gallery-item:hover img {
+    transform: scale(1.05);
+}
+*/
+
+.plate-gallery-caption {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.7) 50%, rgba(0, 0, 0, 0) 100%);
+    /* Gradient overlay */
+    color: white;
+    padding: 1.5rem 0.75rem 0.5rem 0.75rem;
+    /* More padding at top for gradient effect */
+    font-size: 0.8rem;
+    text-align: center;
+    opacity: 0;
+    /* Hidden by default */
+    transform: translateY(20px);
+    /* Start slightly lower for a subtle slide-up */
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    overflow-wrap: break-word;
+    /* Break long filenames */
+    /* Ensure text is readable */
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+.plate-gallery-item:hover .plate-gallery-caption {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.plate-gallery-caption code {
+    background-color: transparent;
+    /* Make code background transparent */
+    color: #fff;
+    /* Ensure code text is white */
+    padding: 0;
+    font-weight: 500;
+}
+
+/* Icon in corner for visual cue */
+.plate-gallery-item::after {
+    content: '\F3E5';
+    /* Changed to Bootstrap icon for eye-fill */
+    font-family: 'bootstrap-icons';
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    font-size: 1.1rem;
+    /* Slightly larger icon */
+    color: white;
+    background-color: rgba(0, 0, 0, 0.6);
+    /* Slightly darker background for better contrast */
+    padding: 0.4rem 0.6rem;
+    /* Adjusted padding for new size */
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    pointer-events: none;
+    /* So it doesn't interfere with the link */
+    transform: scale(0.8);
+}
+
+.plate-gallery-item:hover::after {
+    opacity: 1;
+    transform: scale(1);
+}
