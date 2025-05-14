@@ -321,7 +321,7 @@ def _ensure_users_table_exists():
             # --- Create a default admin user if it doesn't exist ---
             cursor.execute("SELECT id FROM users WHERE username = %s", ('admin',))
             if not cursor.fetchone():
-                default_admin_password = os.environ.get('ADMIN_PASSWORD', 'default_admin_pass_123') # Consider a more secure default or prompt
+                default_admin_password = os.environ.get('ADMIN_PASSWORD') # Consider a more secure default or prompt
                 hashed_password = generate_password_hash(default_admin_password)
                 cursor.execute(
                     "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",

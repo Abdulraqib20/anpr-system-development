@@ -8,8 +8,37 @@
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/logo.png') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='images/logo.png') }}">
     <!-- Bootswatch Theme Link - Give it an ID for JS -->
-    <link id="bootswatch-theme-link" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.5/dist/brite/bootstrap.min.css" rel="stylesheet"
-          crossorigin="anonymous">
+    <link id="bootswatch-theme-link" href="" rel="stylesheet" crossorigin="anonymous">
+    <script>
+      (function() {
+        const THEME_STORAGE_KEY = 'anpr_selected_theme';
+        const defaultTheme = 'united'; // Default theme
+        const availableThemes = [
+            'brite', 'cerulean', 'cosmo', 'cyborg', 'darkly',
+            'flatly', 'journal', 'litera', 'lumen', 'lux',
+            'materia', 'minty', 'morph', 'pulse', 'quartz',
+            'sandstone', 'simplex', 'sketchy', 'slate', 'solar',
+            'spacelab', 'superhero', 'united', 'vapor', 'yeti', 'zephyr'
+        ];
+        let themeToApply = defaultTheme;
+        try {
+          const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+          if (savedTheme && availableThemes.includes(savedTheme.toLowerCase())) {
+            themeToApply = savedTheme;
+          }
+        } catch (e) {
+          // console.warn('Could not access localStorage for theme:', e); // Optional: for debugging
+        }
+        const themeUrl = `https://cdn.jsdelivr.net/npm/bootswatch@5.3.5/dist/${themeToApply.toLowerCase()}/bootstrap.min.css`;
+        const themeLinkTag = document.getElementById('bootswatch-theme-link');
+        if (themeLinkTag) {
+            themeLinkTag.href = themeUrl;
+        } else {
+            // Fallback if ID is wrong or element not found yet (should not happen if script is right after link)
+            document.write('<link rel="stylesheet" href="' + themeUrl + '" crossorigin="anonymous">');
+        }
+      })();
+    </script>
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <!-- Custom CSS -->
