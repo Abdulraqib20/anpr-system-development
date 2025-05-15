@@ -318,19 +318,39 @@ def _ensure_users_table_exists():
             conn.commit()
             logger.info("Table 'users' checked/created successfully.")
 
-            # --- Create a default admin user if it doesn't exist ---
-            cursor.execute("SELECT id FROM users WHERE username = %s", ('admin',))
-            if not cursor.fetchone():
-                default_admin_password = os.environ.get('ADMIN_PASSWORD') # Consider a more secure default or prompt
-                hashed_password = generate_password_hash(default_admin_password)
-                cursor.execute(
-                    "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
-                    ('admin', hashed_password, 'admin')
-                )
-                conn.commit()
-                logger.info(f"Default admin user 'admin' created. PLEASE CHANGE THE DEFAULT PASSWORD IF APPLICABLE.")
+            # --- Create/Update default admin user ---
+            default_admin_username = 'admin'
+            default_admin_password_env = os.environ.get('ADMIN_PASSWORD')
+
+            if not default_admin_password_env:
+                logger.warning(f"ADMIN_PASSWORD not set in .env. Cannot create or update '{default_admin_username}'.")
             else:
-                logger.info("Admin user 'admin' already exists.")
+                cursor.execute("SELECT id, password_hash FROM users WHERE username = %s", (default_admin_username,))
+                admin_user_data = cursor.fetchone()
+
+                if not admin_user_data:
+                    # Admin user does not exist, create them
+                    hashed_password = generate_password_hash(default_admin_password_env)
+                    cursor.execute(
+                        "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
+                        (default_admin_username, hashed_password, 'admin')
+                    )
+                    conn.commit()
+                    logger.info(f"Default admin user '{default_admin_username}' created. PLEASE CHANGE THE DEFAULT PASSWORD IF APPLICABLE and you haven't already.")
+                else:
+                    # Admin user exists, check if password needs updating
+                    admin_id, stored_password_hash = admin_user_data
+                    if not check_password_hash(stored_password_hash, default_admin_password_env):
+                        # Password in .env is different from stored hash, update it
+                        new_hashed_password = generate_password_hash(default_admin_password_env)
+                        cursor.execute(
+                            "UPDATE users SET password_hash = %s WHERE id = %s",
+                            (new_hashed_password, admin_id)
+                        )
+                        conn.commit()
+                        logger.info(f"Password for admin user '{default_admin_username}' has been updated from .env settings.")
+                    else:
+                        logger.info(f"Admin user '{default_admin_username}' already exists and password matches .env (or .env password unchanged).")
             # ----------------------------------------------------------
 
     except Exception as e:
