@@ -9,41 +9,64 @@
         .table th, .table td {
             vertical-align: middle;
         }
-        .action-buttons .btn {
-            margin-right: 0.3rem;
+        .action-buttons .btn, .action-buttons .d-inline { /* Ensure inline forms also get margin */
+            margin-left: 0.3rem;
+            margin-bottom: 0.3rem; /* Add bottom margin for wrap on small screens */
+        }
+        .action-buttons {
+            min-width: 280px; /* Ensure enough space for buttons or allow wrap */
+        }
+        .form-check-label {
+            padding-top: 0.1rem; /* Align label better with switch */
         }
     </style>
 {% endblock %}
 
 {% block content %}
-<div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1 class="h2"><i class="bi bi-list-task me-2"></i>{{ title }}</h1>
-        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
+<div class="container mt-4 mb-5"> {# Added mb-5 for more bottom space #}
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap"> {# Added flex-wrap for responsiveness #}
+        <h1 class="h2 mb-2 me-3"><i class="bi bi-list-task me-2"></i>{{ title }}</h1>
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm mb-2">
             <i class="bi bi-arrow-left"></i> Back to Admin Dashboard
         </a>
     </div>
 
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+            <div class="alert alert-{{ category if category != 'message' else 'info' }} alert-dismissible fade show mb-4" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
     <!-- Create New Watchlist Form -->
     <div class="card mb-4 shadow-sm">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="bi bi-plus-circle-fill me-2"></i>Create New Watchlist</h5>
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-plus-circle-fill me-2 text-primary"></i>Create New Watchlist</h5>
         </div>
-        <div class="card-body">
+        <div class="card-body p-4">
             <form method="POST" action="{{ url_for('admin_watchlists') }}" novalidate>
                 {{ form.hidden_tag() }} {# CSRF token #}
-                <div class="row g-3">
-                    <div class="col-md-4">
-                        {{ fM.render_field(form.name, placeholder='e.g., Stolen Vehicles') }}
+                <div class="mb-3">
+                    {{ fM.render_field(form.name, placeholder='e.g., Stolen Vehicles, VIP List', class="form-control form-control-lg") }}
+                </div>
+                <div class="mb-3">
+                    {{ fM.render_field(form.description, placeholder='e.g., Plates reported as stolen in Ilorin', class="form-control") }}
+                </div>
+                <div class="row align-items-center">
+                    <div class="col-md-6 mb-3 mb-md-0">
+                        <div class="form-check form-switch fs-5">
+                             {{ form.is_active(class="form-check-input", role="switch") }}
+                             {{ form.is_active.label(class="form-check-label") }}
+                        </div>
+                        <small class="form-text text-muted d-block mt-1">Active watchlists will generate alerts upon matching a detected plate.</small>
                     </div>
-                    <div class="col-md-5">
-                        {{ fM.render_field(form.description, placeholder='e.g., Plates reported as stolen in City X') }}
-                    </div>
-                    <div class="col-md-2 mt-md-4 pt-md-3">
-                        {{ fM.render_field(form.is_active) }}
-                    </div>
-                    <div class="col-md-1 mt-md-4 pt-md-2 text-end">
-                        {{ fM.render_field(form.submit, class='btn btn-primary btn-block') }}
+                    <div class="col-md-6 text-md-end">
+                        {{ form.submit(class='btn btn-primary btn-lg px-4') }}
                     </div>
                 </div>
             </form>
@@ -52,48 +75,56 @@
 
     <!-- List of Existing Watchlists -->
     <div class="card shadow-sm">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="bi bi-eye-fill me-2"></i>Existing Watchlists</h5>
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="bi bi-eye-fill me-2 text-info"></i>Existing Watchlists</h5>
+            {# Optional: Add a count here if useful #}
+            {# <span class="badge bg-secondary rounded-pill">{{ watchlists|length }} total</span> #}
         </div>
         <div class="card-body p-0">
             {% if watchlists %}
             <div class="table-responsive">
-                <table class="table table-striped table-hover mb-0">
-                    <thead class="table-dark">
+                <table class="table table-hover table-striped mb-0"> {# Added table-hover #}
+                    <thead class="table-light"> {# Changed to table-light for less heavy header #}
                         <tr>
-                            <th>Name</th>
-                            <th>Description</th>
-                            <th class="text-center">Entries</th>
-                            <th class="text-center">Status</th>
-                            <th>Created At</th>
-                            <th class="text-end">Actions</th>
+                            <th scope="col" style="width: 20%;">Name</th>
+                            <th scope="col" style="width: 35%;">Description</th>
+                            <th scope="col" class="text-center" style="width: 10%;">Entries</th>
+                            <th scope="col" class="text-center" style="width: 10%;">Status</th>
+                            <th scope="col" style="width: 10%;">Created At</th>
+                            <th scope="col" class="text-end" style="width: 15%;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for wl in watchlists %}
                         <tr>
                             <td><strong>{{ wl.name }}</strong></td>
-                            <td>{{ wl.description | default('-', true) }}</td>
+                            <td><small>{{ wl.description | default('--', true) }}</small></td>
                             <td class="text-center">
-                                <a href="{{ url_for('admin_watchlist_entries', watchlist_id=wl.id) }}" class="badge bg-primary rounded-pill text-decoration-none">
+                                <a href="{{ url_for('admin_watchlist_entries', watchlist_id=wl.id) }}" class="badge rounded-pill text-bg-primary text-decoration-none" title="View {{ wl.entry_count }} entries">
                                     {{ wl.entry_count }}
                                 </a>
                             </td>
                             <td class="text-center">
                                 {% if wl.is_active %}
-                                    <span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Active</span>
+                                    <span class="badge text-bg-success"><i class="bi bi-check-circle-fill me-1"></i>Active</span>
                                 {% else %}
-                                    <span class="badge bg-secondary"><i class="bi bi-x-circle-fill"></i> Inactive</span>
+                                    <span class="badge text-bg-secondary"><i class="bi bi-x-circle-fill me-1"></i>Inactive</span>
                                 {% endif %}
                             </td>
-                            <td>{{ wl.created_at.strftime('%Y-%m-%d %H:%M') if wl.created_at else 'N/A' }}</td>
+                            <td><small>{{ wl.created_at.strftime('%Y-%m-%d') if wl.created_at else 'N/A' }}</small></td>
                             <td class="text-end action-buttons">
-                                <a href="{{ url_for('admin_watchlist_entries', watchlist_id=wl.id) }}" class="btn btn-sm btn-info" title="View/Manage Entries">
-                                    <i class="bi bi-card-list"></i> Entries
+                                <a href="{{ url_for('admin_watchlist_entries', watchlist_id=wl.id) }}" class="btn btn-outline-info btn-sm" title="Manage Entries">
+                                    <i class="bi bi-list-ul"></i> <span class="d-none d-md-inline">Entries</span>
                                 </a>
-                                {# Edit and Delete buttons to be implemented later #}
-                                <button class="btn btn-sm btn-warning disabled" title="Edit Watchlist (Coming Soon)"><i class="bi bi-pencil-fill"></i></button>
-                                <button class="btn btn-sm btn-danger disabled" title="Delete Watchlist (Coming Soon)"><i class="bi bi-trash-fill"></i></button>
+                                <a href="{{ url_for('admin_edit_watchlist', watchlist_id=wl.id) }}" class="btn btn-outline-warning btn-sm" title="Edit Watchlist">
+                                    <i class="bi bi-pencil-fill"></i> <span class="d-none d-md-inline">Edit</span>
+                                </a>
+                                <form method="POST" action="{{ url_for('admin_delete_watchlist', watchlist_id=wl.id) }}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete watchlist \'{{ wl.name | e }}\' and all its {{ wl.entry_count }} entries? This action cannot be undone.');">
+                                    {{ form.hidden_tag() }} {# Use the main page form for CSRF token #}
+                                    <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete Watchlist">
+                                        <i class="bi bi-trash-fill"></i> <span class="d-none d-md-inline">Delete</span>
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                         {% endfor %}
@@ -101,8 +132,9 @@
                 </table>
             </div>
             {% else %}
-            <div class="alert alert-info mb-0 rounded-0" role="alert">
-                <i class="bi bi-info-circle-fill me-2"></i>No watchlists found. Create one using the form above.
+            <div class="alert alert-secondary mb-0 p-4 text-center rounded-0" role="alert"> {# Made alert more prominent #}
+                <i class="bi bi-info-circle-fill fs-4 d-block mb-2"></i>
+                No watchlists found. Please create one using the form above.
             </div>
             {% endif %}
         </div>

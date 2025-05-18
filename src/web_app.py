@@ -1175,7 +1175,6 @@ def admin_usage_metrics():
     # Pass both usage_data and pricing_rates to the template
     return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics',
                           usage_data=usage_data, pricing_rates=pricing_rates)
-# ----------------------------------------------
 
 @app.route('/admin/detection-analytics')
 @login_required
@@ -1309,6 +1308,87 @@ def admin_watchlists():
     return render_template('admin/admin_watchlists.html', title='Manage Watchlists',
                            form=form, watchlists=watchlists_data)
 
+@app.route('/admin/watchlist/edit/<int:watchlist_id>', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_edit_watchlist(watchlist_id):
+    conn = get_db()
+    if not conn:
+        flash('Database connection error.', 'danger')
+        return redirect(url_for('admin_watchlists'))
+
+    watchlist_to_edit = None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, description, is_active FROM watchlists WHERE id = %s", (watchlist_id,))
+            data = cur.fetchone()
+            if data:
+                watchlist_to_edit = dict(zip([column[0] for column in cur.description], data))
+            else:
+                flash('Watchlist not found.', 'danger')
+                return redirect(url_for('admin_watchlists'))
+    except psycopg2.Error as e:
+        logger.error(f"Error fetching watchlist ID {watchlist_id} for edit: {e}", exc_info=True)
+        flash('Error fetching watchlist details.', 'danger')
+        return redirect(url_for('admin_watchlists'))
+
+    form = WatchlistForm(obj=type('obj', (object,), watchlist_to_edit)()) # Pre-populate form
+
+    if form.validate_on_submit():
+        new_name = form.name.data
+        new_description = form.description.data
+        new_is_active = form.is_active.data
+        try:
+            with conn.cursor() as cur:
+                # Check if name is being changed to one that already exists (excluding itself)
+                cur.execute("SELECT id FROM watchlists WHERE name = %s AND id != %s", (new_name, watchlist_id))
+                if cur.fetchone():
+                    flash(f'Error: A watchlist with the name "{new_name}" already exists.', 'danger')
+                else:
+                    cur.execute("UPDATE watchlists SET name = %s, description = %s, is_active = %s WHERE id = %s",
+                                (new_name, new_description, new_is_active, watchlist_id))
+                    conn.commit()
+                    flash(f'Watchlist "{new_name}" updated successfully!', 'success')
+                    logger.info(f"Admin {current_user.username} updated watchlist ID {watchlist_id}.")
+                    return redirect(url_for('admin_watchlists'))
+        except psycopg2.Error as e:
+            conn.rollback()
+            logger.error(f"Error updating watchlist ID {watchlist_id}: {e}", exc_info=True)
+            flash('Error updating watchlist. Please try again.', 'danger')
+
+    return render_template('admin/admin_edit_watchlist.html', title=f'Edit Watchlist: {watchlist_to_edit["name"]}',
+                           form=form, watchlist_id=watchlist_id, current_watchlist_name=watchlist_to_edit["name"])
+
+@app.route('/admin/watchlist/delete/<int:watchlist_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_delete_watchlist(watchlist_id):
+    conn = get_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # Fetch watchlist name for flash message before deleting
+                cur.execute("SELECT name FROM watchlists WHERE id = %s", (watchlist_id,))
+                watchlist_name_tuple = cur.fetchone()
+                watchlist_name = watchlist_name_tuple[0] if watchlist_name_tuple else f"ID {watchlist_id}"
+
+                # ON DELETE CASCADE in DB schema should handle related entries and alerts
+                cur.execute("DELETE FROM watchlists WHERE id = %s", (watchlist_id,))
+                conn.commit()
+
+                if cur.rowcount > 0:
+                    flash(f'Watchlist "{watchlist_name}" and all its associated entries and alerts have been deleted.', 'success')
+                    logger.info(f"Admin {current_user.username} deleted watchlist ID {watchlist_id} ('{watchlist_name}').")
+                else:
+                    flash(f'Watchlist ID {watchlist_id} not found or already deleted.', 'warning')
+        except psycopg2.Error as e:
+            conn.rollback()
+            logger.error(f"Error deleting watchlist ID {watchlist_id}: {e}", exc_info=True)
+            flash('Error deleting watchlist. Please try again.', 'danger')
+    else:
+        flash('Database connection error.', 'danger')
+    return redirect(url_for('admin_watchlists'))
+
 @app.route('/admin/watchlist/<int:watchlist_id>/entries', methods=['GET', 'POST'])
 @login_required
 @admin_required
@@ -1367,6 +1447,41 @@ def admin_watchlist_entries(watchlist_id):
 
     return render_template('admin/admin_watchlist_entries.html', title=f'Entries for {watchlist_info["name"] if watchlist_info else "Watchlist"}',
                            form=form, entries=entries_data, watchlist=watchlist_info, csrf_form=FlaskForm()) # Pass empty FlaskForm for CSRF in delete forms
+
+# --- Route to delete a watchlist entry ---
+@app.route('/admin/watchlist_entry/delete/<int:entry_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_delete_watchlist_entry(entry_id):
+    conn = get_db()
+    watchlist_id_to_redirect = None # To redirect back to the correct watchlist page
+
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # Optional: Get watchlist_id for redirect before deleting
+                cur.execute("SELECT watchlist_id FROM watchlist_entries WHERE id = %s", (entry_id,))
+                result = cur.fetchone()
+                if result:
+                    watchlist_id_to_redirect = result[0]
+
+                cur.execute("DELETE FROM watchlist_entries WHERE id = %s", (entry_id,))
+                conn.commit()
+                if cur.rowcount > 0:
+                    flash(f'Watchlist entry ID {entry_id} deleted successfully.', 'success')
+                    logger.info(f"Admin {current_user.username} deleted watchlist entry ID {entry_id}.")
+                else:
+                    flash(f'Watchlist entry ID {entry_id} not found or already deleted.', 'warning')
+        except psycopg2.Error as e:
+            conn.rollback()
+            logger.error(f"Error deleting watchlist entry ID {entry_id}: {e}", exc_info=True)
+            flash('Error deleting watchlist entry. Please try again.', 'danger')
+    else:
+        flash('Database connection error.', 'danger')
+
+    if watchlist_id_to_redirect:
+        return redirect(url_for('admin_watchlist_entries', watchlist_id=watchlist_id_to_redirect))
+    return redirect(url_for('admin_watchlists')) # Fallback redirect
 
 # --- Alert Management Routes ---
 @app.route('/admin/alert/acknowledge/<int:alert_id>', methods=['POST'])

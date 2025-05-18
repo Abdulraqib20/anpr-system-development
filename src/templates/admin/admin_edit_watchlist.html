@@ -1,0 +1,66 @@
+{% extends 'base.html' %}
+{% import "_form_macros.html" as fM %}
+
+{% block title %}{{ title }} - ANPR System{% endblock %}
+
+{% block head_extra %}
+    {{ super() }}
+    <style>
+        .form-check-label {
+            padding-top: 0.1rem; /* Align label better with switch */
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap">
+        <h1 class="h2 mb-2 me-3"><i class="bi bi-pencil-square me-2"></i>Edit Watchlist: <span class="text-primary">{{ current_watchlist_name }}</span></h1>
+        <a href="{{ url_for('admin_watchlists') }}" class="btn btn-outline-secondary btn-sm mb-2">
+            <i class="bi bi-arrow-left"></i> Back to All Watchlists
+        </a>
+    </div>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+            <div class="alert alert-{{ category if category != 'message' else 'info' }} alert-dismissible fade show mb-4" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-card-heading me-2 text-primary"></i>Watchlist Details</h5>
+        </div>
+        <div class="card-body p-4">
+            <form method="POST" action="{{ url_for('admin_edit_watchlist', watchlist_id=watchlist_id) }}" novalidate>
+                {{ form.hidden_tag() }} {# Includes CSRF token #}
+
+                <div class="mb-3">
+                    {{ fM.render_field(form.name, class="form-control form-control-lg", placeholder="e.g., Stolen Vehicles, VIP List") }}
+                </div>
+                <div class="mb-3">
+                    {{ fM.render_field(form.description, class="form-control", placeholder="Optional: A brief description of the watchlist's purpose") }}
+                </div>
+                <div class="form-check form-switch fs-5 mb-3">
+                    {{ form.is_active(class="form-check-input", role="switch") }}
+                    {{ form.is_active.label(class="form-check-label") }}
+                </div>
+                <small class="form-text text-muted d-block mb-4">If unchecked, this watchlist will not generate alerts.</small>
+
+                <hr class="my-4">
+
+                <div class="d-flex justify-content-end">
+                    <a href="{{ url_for('admin_watchlists') }}" class="btn btn-secondary btn-lg me-3">Cancel</a>
+                    {{ form.submit(class="btn btn-primary btn-lg px-4", value="Save Changes") }}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
