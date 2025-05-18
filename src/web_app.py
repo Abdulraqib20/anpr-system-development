@@ -995,7 +995,7 @@ def admin_usage_metrics():
     # Define pricing rates - these can be adjusted as needed
     pricing_rates = {
         # 'per_request': 2.00,  # $2 per request
-        'per_token': 0.0013      # $0.0013 per token
+        'per_token': 0.00013      # $0.00013 per token
     }
 
     if not conn:
@@ -1069,6 +1069,98 @@ def admin_usage_metrics():
     return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics',
                           usage_data=usage_data, pricing_rates=pricing_rates)
 # ----------------------------------------------
+
+@app.route('/admin/detection-analytics')
+@login_required
+@admin_required
+def admin_detection_analytics():
+    logger.info(f"Admin {current_user.username} accessing Detection Analytics page.")
+    conn = get_db()
+    analytics_data = {
+        'by_vehicle_type': [],
+        'by_vehicle_color': [],
+        'detections_per_day': [], # Last 30 days
+        'by_hour_of_day': [],
+        'by_day_of_week': [],
+        'error': None
+    }
+
+    if not conn:
+        analytics_data['error'] = "Database connection not available."
+        logger.error("Detection Analytics: Database connection not available.")
+        return render_template('admin/detection_stats.html', title='Detection Analytics', analytics_data=analytics_data)
+
+    try:
+        with conn.cursor() as cur:
+            # 1. By Vehicle Type
+            cur.execute("""
+                SELECT vehicle_type, COUNT(*) as count
+                FROM detected_plates
+                WHERE vehicle_type IS NOT NULL AND vehicle_type <> 'unknown' AND vehicle_type <> ''
+                GROUP BY vehicle_type
+                ORDER BY count DESC;
+            """)
+            analytics_data['by_vehicle_type'] = [dict(zip([column[0] for column in cur.description], row)) for row in cur.fetchall()]
+
+            # 2. By Vehicle Color
+            cur.execute("""
+                SELECT vehicle_color, COUNT(*) as count
+                FROM detected_plates
+                WHERE vehicle_color IS NOT NULL AND vehicle_color <> 'unknown' AND vehicle_color <> ''
+                GROUP BY vehicle_color
+                ORDER BY count DESC;
+            """)
+            analytics_data['by_vehicle_color'] = [dict(zip([column[0] for column in cur.description], row)) for row in cur.fetchall()]
+
+            # 3. Detections per day (last 30 days)
+            cur.execute("""
+                SELECT DATE_TRUNC('day', end_time) AS detection_day, COUNT(*) AS count
+                FROM detected_plates
+                WHERE end_time >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY detection_day
+                ORDER BY detection_day ASC;
+            """)
+            analytics_data['detections_per_day'] = [
+                {'date': row[0].strftime('%Y-%m-%d'), 'count': row[1]}
+                for row in cur.fetchall()
+            ]
+
+            # 4. By Hour of Day
+            cur.execute("""
+                SELECT EXTRACT(HOUR FROM end_time) AS hour_of_day, COUNT(*) AS count
+                FROM detected_plates
+                GROUP BY hour_of_day
+                ORDER BY hour_of_day ASC;
+            """)
+            # Ensure all 24 hours are present, even if count is 0
+            hourly_counts = {row[0]: row[1] for row in cur.fetchall()}
+            analytics_data['by_hour_of_day'] = [{'hour': h, 'count': hourly_counts.get(float(h), 0)} for h in range(24)]
+
+            # 5. By Day of Week
+            cur.execute("""
+                SELECT
+                    EXTRACT(ISODOW FROM end_time) AS day_number,
+                    TO_CHAR(end_time, 'Day') AS day_name,
+                    COUNT(*) AS count
+                FROM detected_plates
+                GROUP BY day_number, day_name
+                ORDER BY day_number ASC;
+            """)
+            day_mapping = {1: 'Monday', 2: 'Tuesday', 3: 'Wednesday', 4: 'Thursday', 5: 'Friday', 6: 'Saturday', 7: 'Sunday'}
+            weekly_counts = {row[0]: {'name': row[1].strip(), 'count': row[2]} for row in cur.fetchall()}
+            analytics_data['by_day_of_week'] = [
+                {'day_number': i, 'day_name': day_mapping[i], 'count': weekly_counts.get(float(i), {}).get('count', 0)}
+                for i in range(1, 8)
+            ]
+
+    except psycopg2.Error as e:
+        logger.error(f"Detection Analytics: Database error: {e}", exc_info=True)
+        analytics_data['error'] = f"Database error occurred: {str(e)}"
+    except Exception as e_general:
+        logger.error(f"Detection Analytics: General error: {e_general}", exc_info=True)
+        analytics_data['error'] = f"An unexpected error occurred: {str(e_general)}"
+
+    return render_template('admin/detection_stats.html', title='Detection Analytics', analytics_data=analytics_data)
 
 # --- Main Execution ---
 if __name__ == '__main__':

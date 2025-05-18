@@ -4,6 +4,7 @@
 
 {% block head_extra %}
 {{ super() }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
     .stat-card {
         border-left: 5px solid var(--bs-primary);
@@ -45,6 +46,17 @@
     .pricing-value {
         font-weight: 700;
         color: var(--bs-success);
+    }
+    .chart-container {
+        position: relative;
+        margin: auto;
+        min-height: 300px; /* Minimum height for charts */
+        height: 45vh; /* Responsive height */
+        width: 100%;
+        margin-bottom: 2rem;
+    }
+    .card-header i {
+        margin-right: 0.5rem;
     }
 </style>
 {% endblock %}
@@ -328,5 +340,287 @@
         </div>
     </div>
 
+    <!-- Charts Section -->
+    <div class="row mb-4">
+        <div class="col-lg-6">
+            <div class="card shadow">
+                <div class="card-header">
+                   <i class="bi bi-bar-chart-line-fill"></i> API Usage Summary
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="summaryStatsChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow">
+                <div class="card-header">
+                    <i class="bi bi-pie-chart-fill"></i> Token Usage by Type & Model (Today)
+                </div>
+                <div class="card-body">
+                     <div class="chart-container">
+                        <canvas id="tokensByTypeModelTodayChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-lg-12">
+            <div class="card shadow">
+                <div class="card-header">
+                    <i class="bi bi-bar-chart-steps"></i> Overall Token Usage & Calls by Type & Model
+                </div>
+                <div class="card-body">
+                     <div class="chart-container" style="height: 60vh;"> {# More height for potentially many bars #}
+                        <canvas id="tokensByTypeModelOverallChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
 </div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    // Helper to generate an array of distinct colors
+    function generateDistinctColors(count) {
+        const colors = [];
+        const hueStep = 360 / count;
+        for (let i = 0; i < count; i++) {
+            const hue = i * hueStep;
+            // Using HSL for more control over saturation and lightness
+            colors.push(`hsla(${hue}, 70%, 60%, 0.7)`); // Background color with alpha
+        }
+        return colors;
+    }
+    function generateDistinctBorderColors(count) {
+        const colors = [];
+        const hueStep = 360 / count;
+        for (let i = 0; i < count; i++) {
+            const hue = i * hueStep;
+            colors.push(`hsl(${hue}, 70%, 50%)`); // Border color (solid)
+        }
+        return colors;
+    }
+
+
+    {% if not usage_data.error and usage_data.summary_stats %}
+    // Chart 1: Summary Stats (Bar Chart)
+    const summaryStatsCtx = document.getElementById('summaryStatsChart');
+    if (summaryStatsCtx) {
+        new Chart(summaryStatsCtx, {
+            type: 'bar',
+            data: {
+                labels: ['Total Calls', 'Total Tokens', 'Calls Today', 'Tokens Today'],
+                datasets: [{
+                    label: 'Count',
+                    data: [
+                        {{ usage_data.summary_stats.total_calls | default(0) }},
+                        {{ usage_data.summary_stats.grand_total_tokens | default(0) }},
+                        {{ usage_data.summary_stats.today_total_calls | default(0) }},
+                        {{ usage_data.summary_stats.today_total_tokens | default(0) }}
+                    ],
+                    backgroundColor: [
+                        'rgba(54, 162, 235, 0.7)', // Blue
+                        'rgba(255, 159, 64, 0.7)', // Orange
+                        'rgba(75, 192, 192, 0.7)', // Green
+                        'rgba(255, 99, 132, 0.7)'  // Red
+                    ],
+                    borderColor: [
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 159, 64, 1)',
+                        'rgba(75, 192, 192, 1)',
+                        'rgba(255, 99, 132, 1)'
+                    ],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Count / Value' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    title: { display: true, text: 'Overall and Today's API Usage Metrics', font: { size: 16 } }
+                }
+            }
+        });
+    }
+    {% endif %}
+
+    {% if not usage_data.error and usage_data.by_call_type %}
+    const byCallTypeData = {{ usage_data.by_call_type | tojson }};
+
+    // Chart 2: Tokens by Type & Model (Today) - Pie Chart
+    const tokensTodayCtx = document.getElementById('tokensByTypeModelTodayChart');
+    if (tokensTodayCtx) {
+        const todayLabels = [];
+        const todayTokenData = [];
+        for (const callType in byCallTypeData) {
+            if (byCallTypeData.hasOwnProperty(callType)) {
+                byCallTypeData[callType].forEach(modelData => {
+                    if (modelData.today_sum_total_tokens > 0) { // Only include if tokens were used today
+                        todayLabels.push(`${callType} (${modelData.model_name})`);
+                        todayTokenData.push(modelData.today_sum_total_tokens || 0);
+                    }
+                });
+            }
+        }
+
+        if (todayLabels.length > 0) {
+            const todayBgColors = generateDistinctColors(todayLabels.length);
+            new Chart(tokensTodayCtx, {
+                type: 'pie', // Changed to Pie
+                data: {
+                    labels: todayLabels,
+                    datasets: [{
+                        label: 'Tokens Today',
+                        data: todayTokenData,
+                        backgroundColor: todayBgColors,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top', labels: { font: { size: 10 } } },
+                        title: { display: true, text: 'Token Distribution by API Type & Model (Today)', font: { size: 16 } },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed !== null) {
+                                        label += new Intl.NumberFormat().format(context.parsed);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        } else {
+            tokensTodayCtx.parentNode.innerHTML = '<p class="text-center text-muted small fst-italic mt-3">No token usage recorded today for any API type/model combination.</p>';
+        }
+    }
+
+    // Chart 3: Overall Token Usage & Calls by Type & Model (Horizontal Bar Chart)
+    const tokensOverallCtx = document.getElementById('tokensByTypeModelOverallChart');
+    if (tokensOverallCtx) {
+        const overallLabels = [];
+        const overallTokenData = [];
+        const overallCallData = [];
+
+        for (const callType in byCallTypeData) {
+            if (byCallTypeData.hasOwnProperty(callType)) {
+                byCallTypeData[callType].forEach(modelData => {
+                    overallLabels.push(`${callType} (${modelData.model_name})`);
+                    overallTokenData.push(modelData.sum_total_tokens || 0);
+                    overallCallData.push(modelData.num_calls || 0);
+                });
+            }
+        }
+
+        if (overallLabels.length > 0) {
+            const overallBgColors = generateDistinctColors(overallLabels.length);
+            const overallBorderColors = generateDistinctBorderColors(overallLabels.length);
+
+            new Chart(tokensOverallCtx, {
+                type: 'bar',
+                data: {
+                    labels: overallLabels,
+                    datasets: [
+                        {
+                            label: 'Total Tokens (All Time)',
+                            data: overallTokenData,
+                            backgroundColor: overallBgColors,
+                            borderColor: overallBorderColors,
+                            borderWidth: 1,
+                            xAxisID: 'xTokens'
+                        },
+                        {
+                            label: 'Total Calls (All Time)',
+                            data: overallCallData,
+                            type: 'line',
+                            borderColor: 'rgba(153, 102, 255, 1)',
+                            backgroundColor: 'rgba(153, 102, 255, 0.3)',
+                            fill: false,
+                            xAxisID: 'xCalls',
+                            tension: 0.1,
+                            borderWidth: 2
+                        }
+                    ]
+                },
+                options: {
+                    indexAxis: 'y', // Horizontal bar chart
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { // Category axis (was y)
+                            beginAtZero: true,
+                            ticks: { autoSkip: false, font: {size: 10} }
+                        },
+                        xTokens: { // Value axis for Tokens (was xTokens)
+                            position: 'top',
+                            beginAtZero: true,
+                            title: { display: true, text: 'Total Tokens (All Time)' },
+                            ticks: {
+                                callback: function(value) { return new Intl.NumberFormat().format(value); }
+                            }
+                        },
+                        xCalls: { // Value axis for Calls (was xCalls)
+                            position: 'bottom',
+                            beginAtZero: true,
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Total Calls (All Time)' },
+                             ticks: {
+                                callback: function(value) { return new Intl.NumberFormat().format(value); }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        title: { display: true, text: 'Overall Token & Call Count by API Type & Model', font: {size: 16} },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.x !== null && context.chart.options.indexAxis === 'y') {
+                                        label += new Intl.NumberFormat().format(context.parsed.x);
+                                    } else if (context.parsed.y !== null) {
+                                         label += new Intl.NumberFormat().format(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        } else {
+             tokensOverallCtx.parentNode.innerHTML = '<p class="text-center text-muted small fst-italic mt-3">No overall token or call usage recorded.</p>';
+        }
+    }
+    {% endif %}
+});
+</script>
 {% endblock %}

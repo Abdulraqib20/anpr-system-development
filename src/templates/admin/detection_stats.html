@@ -1,0 +1,288 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head_extra %}
+    {{ super() }}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        .chart-container {
+            position: relative;
+            margin: auto;
+            min-height: 300px; /* Minimum height for charts */
+            height: 45vh;
+            width: 100%;
+            margin-bottom: 2rem;
+        }
+        .card-header i {
+            margin-right: 0.5rem;
+        }
+        .text-small {
+            font-size: 0.85rem;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h2"><i class="bi bi-bar-chart-line-fill me-2"></i>{{ title }}</h1>
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> Back to Admin Dashboard
+        </a>
+    </div>
+
+    {% if analytics_data.error %}
+    <div class="alert alert-danger" role="alert">
+        <i class="bi bi-exclamation-triangle-fill"></i> Error fetching analytics data: {{ analytics_data.error }}
+    </div>
+    {% else %}
+
+    <div class="row">
+        <!-- Detections by Vehicle Type -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow">
+                <div class="card-header">
+                    <i class="bi bi-pie-chart-fill"></i> Detections by Vehicle Type
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="vehicleTypeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detections by Vehicle Color -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow">
+                <div class="card-header">
+                    <i class="bi bi-palette-fill"></i> Detections by Vehicle Color
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="vehicleColorChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Detections Over Time (Last 30 days) -->
+        <div class="col-lg-12 mb-4">
+            <div class="card shadow">
+                <div class="card-header">
+                    <i class="bi bi-graph-up"></i> Detections Over Time (Last 30 Days)
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="detectionsOverTimeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- Detections by Hour of Day -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow">
+                <div class="card-header">
+                    <i class="bi bi-clock-fill"></i> Detections by Hour of Day (Overall)
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="detectionsByHourChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detections by Day of Week -->
+        <div class="col-lg-6 mb-4">
+            <div class="card shadow">
+                <div class="card-header">
+                    <i class="bi bi-calendar-week-fill"></i> Detections by Day of Week (Overall)
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="detectionsByDayChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% endif %} {# End no error check #}
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const analyticsData = {{ analytics_data | tojson }};
+
+    // Helper to generate an array of distinct colors for charts
+    function generateDistinctColors(count, opacity = 0.7) {
+        const colors = [];
+        if (count === 0) return colors;
+        const hueStep = 360 / count;
+        for (let i = 0; i < count; i++) {
+            const hue = i * hueStep;
+            colors.push(`hsla(${hue}, 70%, 60%, ${opacity})`);
+        }
+        return colors;
+    }
+    function generateDistinctBorderColors(count) {
+        const colors = [];
+        if (count === 0) return colors;
+        const hueStep = 360 / count;
+        for (let i = 0; i < count; i++) {
+            const hue = i * hueStep;
+            colors.push(`hsl(${hue}, 70%, 50%)`);
+        }
+        return colors;
+    }
+
+    if (!analyticsData.error) {
+        // Chart 1: Detections by Vehicle Type (Doughnut Chart)
+        const vehicleTypeCtx = document.getElementById('vehicleTypeChart');
+        if (vehicleTypeCtx && analyticsData.by_vehicle_type && analyticsData.by_vehicle_type.length > 0) {
+            const labels = analyticsData.by_vehicle_type.map(item => item.vehicle_type);
+            const data = analyticsData.by_vehicle_type.map(item => item.count);
+            new Chart(vehicleTypeCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Detections',
+                        data: data,
+                        backgroundColor: generateDistinctColors(labels.length),
+                        borderColor: generateDistinctBorderColors(labels.length),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' }, title: { display: true, text: 'Detections by Vehicle Type' } }
+                }
+            });
+        } else if (vehicleTypeCtx) {
+            vehicleTypeCtx.parentNode.innerHTML = '<p class="text-center text-muted text-small p-3">No data available for vehicle types.</p>';
+        }
+
+        // Chart 2: Detections by Vehicle Color (Pie Chart)
+        const vehicleColorCtx = document.getElementById('vehicleColorChart');
+        if (vehicleColorCtx && analyticsData.by_vehicle_color && analyticsData.by_vehicle_color.length > 0) {
+            const labels = analyticsData.by_vehicle_color.map(item => item.vehicle_color);
+            const data = analyticsData.by_vehicle_color.map(item => item.count);
+            new Chart(vehicleColorCtx, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Detections',
+                        data: data,
+                        backgroundColor: generateDistinctColors(labels.length),
+                        borderColor: generateDistinctBorderColors(labels.length),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top' }, title: { display: true, text: 'Detections by Vehicle Color' } }
+                }
+            });
+        } else if (vehicleColorCtx) {
+            vehicleColorCtx.parentNode.innerHTML = '<p class="text-center text-muted text-small p-3">No data available for vehicle colors.</p>';
+        }
+
+        // Chart 3: Detections Over Time (Line Chart)
+        const detectionsOverTimeCtx = document.getElementById('detectionsOverTimeChart');
+        if (detectionsOverTimeCtx && analyticsData.detections_per_day && analyticsData.detections_per_day.length > 0) {
+            const labels = analyticsData.detections_per_day.map(item => item.date);
+            const data = analyticsData.detections_per_day.map(item => item.count);
+            new Chart(detectionsOverTimeCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Detections per Day',
+                        data: data,
+                        fill: true,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true, title: {display: true, text: 'Number of Detections'} },
+                              x: { title: {display: true, text: 'Date'} } },
+                    plugins: { legend: { display: true }, title: { display: true, text: 'Daily Detections (Last 30 Days)' } }
+                }
+            });
+        } else if (detectionsOverTimeCtx) {
+            detectionsOverTimeCtx.parentNode.innerHTML = '<p class="text-center text-muted text-small p-3">No detection data available for the last 30 days.</p>';
+        }
+
+        // Chart 4: Detections by Hour of Day (Bar Chart)
+        const detectionsByHourCtx = document.getElementById('detectionsByHourChart');
+        if (detectionsByHourCtx && analyticsData.by_hour_of_day) { // Data should always be present (0-23 hours)
+            const labels = analyticsData.by_hour_of_day.map(item => `${String(item.hour).padStart(2, '0')}:00`);
+            const data = analyticsData.by_hour_of_day.map(item => item.count);
+            new Chart(detectionsByHourCtx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Total Detections',
+                        data: data,
+                        backgroundColor: 'rgba(153, 102, 255, 0.7)',
+                        borderColor: 'rgba(153, 102, 255, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true, title: {display: true, text: 'Number of Detections'}  },
+                              x: { title: {display: true, text: 'Hour of Day'} } },
+                    plugins: { legend: { display: false }, title: { display: true, text: 'Peak Detection Hours (Overall)' } }
+                }
+            });
+        } else if (detectionsByHourCtx) {
+            detectionsByHourCtx.parentNode.innerHTML = '<p class="text-center text-muted text-small p-3">No hourly detection data available.</p>';
+        }
+
+        // Chart 5: Detections by Day of Week (Bar Chart)
+        const detectionsByDayCtx = document.getElementById('detectionsByDayChart');
+        if (detectionsByDayCtx && analyticsData.by_day_of_week) { // Data should always be present (7 days)
+            const labels = analyticsData.by_day_of_week.map(item => item.day_name);
+            const data = analyticsData.by_day_of_week.map(item => item.count);
+            new Chart(detectionsByDayCtx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Total Detections',
+                        data: data,
+                        backgroundColor: 'rgba(255, 159, 64, 0.7)',
+                        borderColor: 'rgba(255, 159, 64, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true, title: {display: true, text: 'Number of Detections'}  },
+                              x: { title: {display: true, text: 'Day of Week'} } },
+                    plugins: { legend: { display: false }, title: { display: true, text: 'Busiest Days of Week (Overall)' } }
+                }
+            });
+        } else if (detectionsByDayCtx) {
+            detectionsByDayCtx.parentNode.innerHTML = '<p class="text-center text-muted text-small p-3">No daily (day of week) detection data available.</p>';
+        }
+    }
+});
+</script>
+{% endblock %}
