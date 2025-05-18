@@ -119,7 +119,10 @@
                                 <a href="{{ url_for('admin_edit_watchlist', watchlist_id=wl.id) }}" class="btn btn-outline-warning btn-sm" title="Edit Watchlist">
                                     <i class="bi bi-pencil-fill"></i> <span class="d-none d-md-inline">Edit</span>
                                 </a>
-                                <form method="POST" action="{{ url_for('admin_delete_watchlist', watchlist_id=wl.id) }}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete watchlist \'{{ wl.name | e }}\' and all its {{ wl.entry_count }} entries? This action cannot be undone.');">
+                                <form method="POST" action="{{ url_for('admin_delete_watchlist', watchlist_id=wl.id) }}" class="d-inline"
+                                      data-confirm-delete
+                                      data-confirm-message="Are you sure you want to delete watchlist '{{ wl.name | e }}' and all its {{ wl.entry_count }} entries? This action cannot be undone."
+                                      data-confirm-type="danger">
                                     {{ form.hidden_tag() }} {# Use the main page form for CSRF token #}
                                     <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete Watchlist">
                                         <i class="bi bi-trash-fill"></i> <span class="d-none d-md-inline">Delete</span>

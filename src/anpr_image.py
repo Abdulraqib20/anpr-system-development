@@ -199,10 +199,11 @@ class ANPRProcessor:
     #----------------------------------------------------------------------------------------------
     # Initialization
     #----------------------------------------------------------------------------------------------
-    def __init__(self):
+    def __init__(self, socketio_instance=None):
         # Initialize components
         self.vehicle_model = YOLO(VEHICLE_MODEL_PATH)
         self.model = YOLO(MODEL_PATH)
+        self.socketio = socketio_instance # Store the SocketIO instance
 
         # --- Groq Initialization ---
         if not GROQ_API_KEY:
@@ -851,6 +852,49 @@ class ANPRProcessor:
                                         ON CONFLICT (detection_id, watchlist_entry_id) DO NOTHING;
                                     """, (detection_id, watchlist_id, watchlist_entry_id))
                                     logger.info(f"ALERT Generated: Plate '{detected_plate_text}' (Detection ID: {detection_id}) matched watchlist '{watchlist_name}' (Entry ID: {watchlist_entry_id}).")
+
+                                    # --- Emit SocketIO Alert --- Start ---
+                                    if self.socketio:
+                                        # Find the original detection data for this detection_id to get image_filename
+                                        original_detection_details = next((item for item in valid_detections_for_db if item.get('temp_detection_id') == detection_id), None)
+                                        if original_detection_details is None:
+                                            # Fallback: search in `detections` list if `valid_detections_for_db` was filtered
+                                            # This requires passing the original `detections` list to this function or a more complex lookup.
+                                            # For now, we assume `image_filename` would be associated if it reached this point.
+                                            # We might need to rethink how `image_filename` is retrieved for the socket event if it's not in `valid_detections_for_db`.
+                                            # Let's try to get it from the record used for insertion.
+                                            # The `record` variable from the loop `for record in records_to_insert:` would have been the one that resulted in `detection_id`
+                                            # This is getting a bit complex due to how `detection_id` is obtained AFTER insertion.
+
+                                            # Simplified approach: Look up the image_filename and other details for the alert payload directly from the DB record.
+                                            # This ensures we have the correct context for the alert.
+                                            alert_payload_cursor = conn.cursor() # New cursor for this lookup
+                                            alert_payload_cursor.execute("""
+                                                SELECT dp.license_plate, dp.image_filename, dp.id as detection_id,
+                                                       wl.name as watchlist_name, wle.reason as watchlist_reason
+                                                FROM detected_plates dp, watchlists wl, watchlist_entries wle
+                                                WHERE dp.id = %s AND wl.id = %s AND wle.id = %s
+                                            """, (detection_id, watchlist_id, watchlist_entry_id))
+                                            payload_data = alert_payload_cursor.fetchone()
+                                            alert_payload_cursor.close()
+
+                                            if payload_data:
+                                                alert_payload = {
+                                                    'plate_text': payload_data[0],
+                                                    'watchlist_name': payload_data[3],
+                                                    'reason': payload_data[4],
+                                                    'alert_time': datetime.now().isoformat(),
+                                                    'detection_id': payload_data[2],
+                                                    'plate_image_filename': payload_data[1], # This is the key part
+                                                    # Client can construct full URLs using base paths known to it
+                                                    # 'detection_url': f'/index#detection-{payload_data[2]}'
+                                                }
+                                                self.socketio.emit('new_alert', alert_payload, room='admins_room')
+                                                logger.info(f"SocketIO event 'new_alert' emitted for plate {alert_payload['plate_text']} to admins_room.")
+                                            else:
+                                                logger.warning(f"Could not retrieve full payload data for alert related to detection ID {detection_id} for SocketIO emit.")
+                                    # --- Emit SocketIO Alert --- End ---
+
                                 except psycopg2.Error as alert_e:
                                     logger.error(f"Error inserting alert for detection {detection_id}, plate {detected_plate_text}, watchlist entry {watchlist_entry_id}: {alert_e}", exc_info=True)
                                     # conn.rollback() # Might not want to rollback everything for an alert error
@@ -1069,7 +1113,7 @@ def main():
     logger.info(f"Starting ANPR image processing system for {len(valid_sources)} source(s): {valid_sources}")
     processor = None # Initialize processor to None for finally block
     try:
-        processor = ANPRProcessor()
+        processor = ANPRProcessor(socketio_instance=None)
         for idx, source_image_path in enumerate(valid_sources):
             logger.info(f"--- Processing image {idx + 1} of {len(valid_sources)}: {source_image_path} ---")
             try:

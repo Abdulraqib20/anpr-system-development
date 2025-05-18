@@ -497,7 +497,10 @@
             let actionsHtml = '';
             if (current_user_is_admin) { // This variable will be set in the script tag
                 actionsHtml = `
-                    <form method="POST" action="${detections_delete_url_base}${det.id}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this detection record and its associated images? This action cannot be undone.');">
+                    <form method="POST" action="${detections_delete_url_base}${det.id}" class="d-inline"
+                          data-confirm-delete
+                          data-confirm-message="Are you sure you want to delete detection for plate '${det.license_plate}'? This also deletes associated images and cannot be undone."
+                          data-confirm-type="danger">
                         <input type="hidden" name="csrf_token" value="${raw_csrf_token_value}">
                         <button type="submit" class="btn btn-sm btn-danger" title="Delete Detection">
                             <i class="bi bi-trash-fill"></i>
@@ -522,6 +525,15 @@
             // Attach modal listener here after row is created
             attachModalListener(row);
             tableBody.appendChild(row);
+
+            // *** NEW: Attach confirmation handler to the dynamically created delete form ***
+            if (current_user_is_admin && window.attachConfirmationHandlerToForm) {
+                const deleteForm = row.querySelector('form[data-confirm-delete]');
+                if (deleteForm) {
+                    window.attachConfirmationHandlerToForm(deleteForm);
+                    // console.log("[Dynamic Form] Attached confirmation handler to delete form for plate:", det.license_plate);
+                }
+            }
         });
     }
 

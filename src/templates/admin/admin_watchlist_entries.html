@@ -112,11 +112,14 @@
                             <td><code class="plate-code">{{ entry.license_plate }}</code></td>
                             <td><small>{{ entry.reason | default('--', true) }}</small></td>
                             <td><small>{{ entry.added_at.strftime('%Y-%m-%d %H:%M:%S') if entry.added_at else 'N/A' }}</small></td>
-                            <td class="text-end">
-                                <form method="POST" action="{{ url_for('admin_delete_watchlist_entry', entry_id=entry.id) }}" class="d-inline" onsubmit="return confirm('Are you sure you want to remove plate \'{{ entry.license_plate | e }}\' from this watchlist?');">
+                            <td class="text-end action-buttons">
+                                <form method="POST" action="{{ url_for('admin_delete_watchlist_entry', entry_id=entry.id) }}" class="d-inline"
+                                      data-confirm-delete
+                                      data-confirm-message="Are you sure you want to remove plate '{{ entry.license_plate | e }}' from this watchlist?"
+                                      data-confirm-type="danger">
                                     {{ csrf_form.hidden_tag() }}
-                                    <button type="submit" class="btn btn-outline-danger btn-sm" title="Remove Plate">
-                                        <i class="bi bi-trash-fill"></i> <span class="d-none d-sm-inline">Remove</span>
+                                    <button type="submit" class="btn btn-outline-danger btn-sm" title="Remove Plate from Watchlist">
+                                        <i class="bi bi-trash-fill"></i> <span class="d-none d-md-inline">Remove</span>
                                     </button>
                                 </form>
                             </td>

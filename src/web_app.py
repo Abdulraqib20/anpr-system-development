@@ -26,6 +26,8 @@ from flask_wtf import FlaskForm
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from wtforms import StringField, PasswordField, BooleanField, SubmitField
 from wtforms.validators import DataRequired, Length, EqualTo, ValidationError
+# --- Flask-SocketIO Imports ---
+from flask_socketio import SocketIO, join_room, leave_room
 # -------------------------------------
 
 # --- functools for wraps ---
@@ -152,6 +154,10 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATI
 csrf = CSRFProtect(app)
 # ---------------------------
 
+# --- Flask-SocketIO Setup ---
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*") # Allow all origins for now, tighten in production
+# ----------------------------
+
 # --- Flask-Login Setup ---
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -262,9 +268,9 @@ def close_db(error):
 # --- Initialize ANPR Processor ---
 anpr_processor = None
 try:
-    # Instantiate it once when the app starts
-    anpr_processor = ANPRProcessor()
-    logger.info("ANPRProcessor initialized successfully.")
+    # Instantiate it once when the app starts, passing the socketio instance
+    anpr_processor = ANPRProcessor(socketio_instance=socketio)
+    logger.info("ANPRProcessor initialized successfully with SocketIO instance.")
 except Exception as e:
     logger.error(f"CRITICAL: Failed to initialize ANPRProcessor: {e}", exc_info=True)
     # The app might still run but uploads will fail. Consider if app should exit.
@@ -1549,11 +1555,34 @@ def admin_all_alerts():
     return render_template('admin/admin_all_alerts.html', title='All System Alerts',
                            alerts=all_alerts_data, csrf_form=csrf_form_alerts)
 
+# --- SocketIO Event Handlers ---
+@socketio.on('connect')
+def handle_connect():
+    if current_user.is_authenticated and current_user.is_admin():
+        join_room('admins_room')
+        logger.info(f"Admin user {current_user.username} (SID: {request.sid}) connected and joined 'admins_room'.")
+    else:
+        # For non-admins or unauthenticated users, we can just log or do nothing.
+        # They won't be added to the 'admins_room' and thus won't receive admin-specific alerts.
+        logger.info(f"User (SID: {request.sid}, Authenticated: {current_user.is_authenticated}) connected but not added to admin room.")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    # Leaving rooms on disconnect is often handled automatically by Flask-SocketIO,
+    # but explicit leave_room can be used if needed.
+    # We can log the disconnect.
+    if current_user.is_authenticated and current_user.is_admin():
+        # leave_room('admins_room') # Optional: Flask-SocketIO usually handles this.
+        logger.info(f"Admin user {current_user.username} (SID: {request.sid}) disconnected.")
+    else:
+        logger.info(f"User (SID: {request.sid}) disconnected.")
+# -----------------------------
+
 # --- Main Execution ---
 if __name__ == '__main__':
     # Use 0.0.0.0 to make it accessible on your network
     # Use debug=True only for development (provides debugger)
     # Set use_reloader=False to prevent restarts during ANPR processing
-    logger.info("Starting Flask development server (reloader disabled).")
+    logger.info("Starting Flask development server with SocketIO (reloader disabled).")
     # For 'production', set debug=False and use a production WSGI server like waitress
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
