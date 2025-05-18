@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+{% import "_form_macros.html" as fM %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head_extra %}
+    {{ super() }}
+    <style>
+        .table th, .table td {
+            vertical-align: middle;
+        }
+        .action-buttons .btn {
+            margin-right: 0.3rem;
+        }
+        .plate-img-thumbnail {
+            max-height: 40px;
+            max-width: 100px;
+            object-fit: cover;
+            border-radius: .25rem;
+        }
+        .alert-acknowledged {
+            /* Optional: Style for acknowledged rows, e.g., slightly faded */
+            /* opacity: 0.7; */
+        }
+        .badge.bg-success i, .badge.bg-danger i, .badge.bg-warning i {
+            font-size: 0.8em;
+            margin-right: 0.2em;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="h2"><i class="bi bi-bell-fill me-2"></i>{{ title }}</h1>
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> Back to Admin Dashboard
+        </a>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-list-ol me-2"></i>Alert Log</h5>
+        </div>
+        <div class="card-body p-0">
+            {% if alerts %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mb-0 small">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Status</th>
+                            <th>Alert Time</th>
+                            <th>Plate</th>
+                            <th>Watchlist</th>
+                            <th>Reason</th>
+                            <th>Vehicle</th>
+                            <th>Acknowledged</th>
+                            <th class="text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for alert in alerts %}
+                        <tr class="{{ 'alert-acknowledged' if alert.acknowledged_at else '' }}">
+                            <td>
+                                {% if alert.acknowledged_at %}
+                                    <span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Acknowledged</span>
+                                {% else %}
+                                    <span class="badge bg-danger"><i class="bi bi-exclamation-triangle-fill"></i> New</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ alert.alert_time.strftime('%Y-%m-%d %H:%M:%S') if alert.alert_time else 'N/A' }}</td>
+                            <td>
+                                {% if alert.plate_image_filename %}
+                                    <img src="{{ url_for('serve_plate_image', filename=alert.plate_image_filename) }}" alt="Plate {{ alert.license_plate }}" class="img-thumbnail plate-img-thumbnail me-2 d-none d-md-inline">
+                                {% endif %}
+                                <code>{{ alert.license_plate }}</code>
+                            </td>
+                            <td>{{ alert.watchlist_name }}</td>
+                            <td><em>{{ alert.watchlist_reason | default('N/A', true) }}</em></td>
+                            <td>{{ alert.vehicle_type | default('N/A', true) | title }} / {{ alert.vehicle_color | default('N/A', true) | title }}</td> <!-- Assuming vehicle details are part of the alert object -->
+                            <td>
+                                {% if alert.acknowledged_at %}
+                                    {{ alert.acknowledged_at.strftime('%Y-%m-%d %H:%M') }}<br>
+                                    <small class="text-muted">by {{ alert.acknowledged_by_username | default('System') }}</small>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td class="text-end action-buttons">
+                                <a href="{{ url_for('index', search=alert.license_plate) }}#detection-id-{{ alert.detection_id }}" class="btn btn-xs btn-outline-primary" title="View Original Detection">
+                                    <i class="bi bi-search"></i> View Detection
+                                </a>
+                                {% if not alert.acknowledged_at %}
+                                <form method="POST" action="{{ url_for('admin_acknowledge_alert', alert_id=alert.alert_id) }}" class="d-inline">
+                                    {{ csrf_form.hidden_tag() }}
+                                    <button type="submit" class="btn btn-xs btn-success" title="Acknowledge this Alert">
+                                        <i class="bi bi-check-lg"></i> Acknowledge
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="alert alert-info mb-0 rounded-0" role="alert">
+                <i class="bi bi-info-circle-fill me-2"></i>No alerts found in the system yet.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

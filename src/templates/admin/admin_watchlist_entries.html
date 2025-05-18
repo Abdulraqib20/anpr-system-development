@@ -1,0 +1,110 @@
+{% extends 'base.html' %}
+{% import "_form_macros.html" as fM %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head_extra %}
+    {{ super() }}
+    <style>
+        .table th, .table td {
+            vertical-align: middle;
+        }
+        .action-buttons .btn {
+            margin-right: 0.3rem;
+        }
+        .plate-code {
+            font-family: monospace;
+            background-color: var(--bs-tertiary-bg);
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-weight: bold;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h2 mb-0"><i class="bi bi-card-checklist me-2"></i>{{ title }}</h1>
+            {% if watchlist %}
+                <small class="text-muted">Managing entries for: <strong>{{ watchlist.name }}</strong></small>
+                {% if watchlist.description %}
+                    <p class="text-muted small mb-0"><em>{{ watchlist.description }}</em></p>
+                {% endif %}
+            {% endif %}
+        </div>
+        <a href="{{ url_for('admin_watchlists') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left"></i> Back to All Watchlists
+        </a>
+    </div>
+
+    <!-- Add New Entry Form -->
+    <div class="card mb-4 shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-plus-square-fill me-2"></i>Add New Plate to Watchlist</h5>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('admin_watchlist_entries', watchlist_id=watchlist.id) }}" novalidate>
+                {{ form.hidden_tag() }} {# CSRF token #}
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        {{ fM.render_field(form.license_plate, placeholder='e.g., ABC123XYZ') }}
+                    </div>
+                    <div class="col-md-6">
+                        {{ fM.render_field(form.reason, placeholder='e.g., Reported stolen, Unathorized access') }}
+                    </div>
+                    <div class="col-md-2 text-end">
+                        {{ fM.render_field(form.submit, class='btn btn-primary w-100') }}
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- List of Existing Entries -->
+    <div class="card shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0"><i class="bi bi-list-columns-reverse me-2"></i>Current Entries in "{{ watchlist.name if watchlist else 'Watchlist' }}"</h5>
+        </div>
+        <div class="card-body p-0">
+            {% if entries %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>License Plate</th>
+                            <th>Reason</th>
+                            <th>Added At</th>
+                            <th class="text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in entries %}
+                        <tr>
+                            <td><code class="plate-code">{{ entry.license_plate }}</code></td>
+                            <td>{{ entry.reason | default('-', true) }}</td>
+                            <td>{{ entry.added_at.strftime('%Y-%m-%d %H:%M') if entry.added_at else 'N/A' }}</td>
+                            <td class="text-end action-buttons">
+                                {# Delete button (form for CSRF) - To be implemented later #}
+                                <form method="POST" action="#" class="d-inline" onsubmit="return confirm('Are you sure you want to remove this plate from the watchlist?');">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_form.csrf_token._value() }}">
+                                    <button type="submit" class="btn btn-sm btn-danger disabled" title="Remove Plate (Coming Soon)">
+                                        <i class="bi bi-trash-fill"></i> Remove
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="alert alert-info mb-0 rounded-0" role="alert">
+                <i class="bi bi-info-circle-fill me-2"></i>No plates have been added to this watchlist yet.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

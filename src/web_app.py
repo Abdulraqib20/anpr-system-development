@@ -209,6 +209,25 @@ def admin_required(f):
     return decorated_function
 # -----------------------------------------
 
+# --- Watchlist Forms ---
+class WatchlistForm(FlaskForm):
+    name = StringField('Watchlist Name', validators=[DataRequired(), Length(min=3, max=100)])
+    description = StringField('Description (Optional)', validators=[Length(max=255)])
+    is_active = BooleanField('Active', default=True)
+    submit = SubmitField('Save Watchlist')
+
+class WatchlistEntryForm(FlaskForm):
+    license_plate = StringField('License Plate', validators=[
+        DataRequired(),
+        Length(min=3, max=20, message='License plate must be between 3 and 20 characters.'),
+        # Basic regex for typical plate characters, can be made stricter
+        # Regexp(r'^[A-Z0-9-]{3,20}$', message='Invalid characters. Use A-Z, 0-9, and hyphens.')
+        # For now, let's keep it simple. Specific regex can be added later based on Nigerian plate format.
+    ])
+    reason = StringField('Reason (Optional)', validators=[Length(max=255)])
+    submit = SubmitField('Add Plate to Watchlist')
+# ----------------------
+
 # Configure allowed extensions for upload
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp'}
 
@@ -352,6 +371,55 @@ def _ensure_users_table_exists():
                     else:
                         logger.info(f"Admin user '{default_admin_username}' already exists and password matches .env (or .env password unchanged).")
             # ----------------------------------------------------------
+
+            # --- Create watchlists table ---
+            create_watchlists_table_sql = """
+            CREATE TABLE IF NOT EXISTS watchlists (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) UNIQUE NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE
+            );
+            """
+            cursor.execute(create_watchlists_table_sql)
+            conn.commit()
+            logger.info("Table 'watchlists' checked/created successfully.")
+            # --------------------------------
+
+            # --- Create watchlist_entries table ---
+            create_watchlist_entries_table_sql = """
+            CREATE TABLE IF NOT EXISTS watchlist_entries (
+                id SERIAL PRIMARY KEY,
+                watchlist_id INTEGER NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+                license_plate VARCHAR(20) NOT NULL, -- Should match format in detected_plates
+                reason TEXT,
+                added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (watchlist_id, license_plate) -- Prevent duplicate plates in the same list
+            );
+            """
+            cursor.execute(create_watchlist_entries_table_sql)
+            conn.commit()
+            logger.info("Table 'watchlist_entries' checked/created successfully.")
+            # -------------------------------------
+
+            # --- Create alerts table ---
+            create_alerts_table_sql = """
+            CREATE TABLE IF NOT EXISTS alerts (
+                id SERIAL PRIMARY KEY,
+                detection_id INTEGER NOT NULL REFERENCES detected_plates(id) ON DELETE CASCADE,
+                watchlist_id INTEGER NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+                watchlist_entry_id INTEGER NOT NULL REFERENCES watchlist_entries(id) ON DELETE CASCADE,
+                alert_time TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                acknowledged_at TIMESTAMP WITH TIME ZONE,
+                acknowledged_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                CONSTRAINT uq_alert_detection_entry UNIQUE (detection_id, watchlist_entry_id)
+            );
+            """
+            cursor.execute(create_alerts_table_sql)
+            conn.commit()
+            logger.info("Table 'alerts' checked/created successfully.")
+            # ---------------------------
 
     except Exception as e:
         logger.error(f"Database error during users table creation or admin user setup: {e}", exc_info=True)
@@ -802,7 +870,46 @@ def upload_image():
 def admin_dashboard():
     # This page will be the main hub for admin-specific functions
     # For now, it can just render a simple template
-    return render_template('admin/admin_dashboard.html', title='Admin Dashboard')
+    unacknowledged_alerts = []
+    conn = get_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # Fetch unacknowledged alerts with details
+                cur.execute("""
+                    SELECT
+                        a.id as alert_id,
+                        a.alert_time,
+                        dp.license_plate,
+                        dp.id as detection_id,
+                        dp.vehicle_type,
+                        dp.vehicle_color,
+                        dp.image_filename as plate_image_filename,
+                        dp.annotated_frame_filename,
+                        wl.name as watchlist_name,
+                        wle.reason as watchlist_reason
+                    FROM alerts a
+                    JOIN detected_plates dp ON a.detection_id = dp.id
+                    JOIN watchlists wl ON a.watchlist_id = wl.id
+                    JOIN watchlist_entries wle ON a.watchlist_entry_id = wle.id
+                    WHERE a.acknowledged_at IS NULL
+                    ORDER BY a.alert_time DESC
+                    LIMIT 10; -- Limit for dashboard display
+                """)
+                alerts_data = cur.fetchall()
+                if alerts_data:
+                    colnames = [desc[0] for desc in cur.description]
+                    unacknowledged_alerts = [dict(zip(colnames, row)) for row in alerts_data]
+                logger.info(f"Admin dashboard: Fetched {len(unacknowledged_alerts)} unacknowledged alerts.")
+        except psycopg2.Error as e:
+            logger.error(f"Error fetching unacknowledged alerts for admin dashboard: {e}", exc_info=True)
+            flash('Could not load unacknowledged alerts due to a database error.', 'danger')
+    else:
+        flash('Database connection not available to load alerts.', 'warning')
+
+    csrf_form_instance = FlaskForm() # Create an instance for CSRF token
+    return render_template('admin/admin_dashboard.html', title='Admin Dashboard',
+                           unacknowledged_alerts=unacknowledged_alerts, csrf_form=csrf_form_instance)
 
 @app.route('/admin/users')
 @login_required
@@ -1161,6 +1268,171 @@ def admin_detection_analytics():
         analytics_data['error'] = f"An unexpected error occurred: {str(e_general)}"
 
     return render_template('admin/detection_stats.html', title='Detection Analytics', analytics_data=analytics_data)
+
+# --- Watchlist Management Routes ---
+@app.route('/admin/watchlists', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_watchlists():
+    form = WatchlistForm()
+    if form.validate_on_submit():
+        conn = get_db()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO watchlists (name, description, is_active) VALUES (%s, %s, %s)",
+                                (form.name.data, form.description.data, form.is_active.data))
+                    conn.commit()
+                    flash(f'Watchlist "{form.name.data}" created successfully!', 'success')
+                    return redirect(url_for('admin_watchlists'))
+            except psycopg2.IntegrityError: # Handles unique name constraint
+                conn.rollback()
+                flash(f'Error: A watchlist with the name "{form.name.data}" already exists.', 'danger')
+            except psycopg2.Error as e:
+                conn.rollback()
+                logger.error(f"Error creating watchlist: {e}", exc_info=True)
+                flash('Error creating watchlist. Please try again.', 'danger')
+        else:
+            flash('Database connection error.', 'danger')
+
+    watchlists_data = []
+    conn = get_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, description, created_at, is_active, (SELECT COUNT(*) FROM watchlist_entries WHERE watchlist_id = watchlists.id) as entry_count FROM watchlists ORDER BY name ASC")
+                watchlists_data = [dict(zip([column[0] for column in cur.description], row)) for row in cur.fetchall()]
+        except psycopg2.Error as e:
+            logger.error(f"Error fetching watchlists: {e}", exc_info=True)
+            flash('Error fetching watchlists.', 'danger')
+
+    return render_template('admin/admin_watchlists.html', title='Manage Watchlists',
+                           form=form, watchlists=watchlists_data)
+
+@app.route('/admin/watchlist/<int:watchlist_id>/entries', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_watchlist_entries(watchlist_id):
+    form = WatchlistEntryForm()
+    conn = get_db()
+
+    # Fetch watchlist details to display its name
+    watchlist_info = None
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, description FROM watchlists WHERE id = %s", (watchlist_id,))
+                watchlist_info = cur.fetchone()
+                if watchlist_info:
+                    watchlist_info = dict(zip([column[0] for column in cur.description], watchlist_info))
+                else:
+                    flash('Watchlist not found.', 'danger')
+                    return redirect(url_for('admin_watchlists'))
+        except psycopg2.Error as e:
+            logger.error(f"Error fetching watchlist info (ID: {watchlist_id}): {e}", exc_info=True)
+            flash('Error fetching watchlist details.', 'danger')
+            return redirect(url_for('admin_watchlists'))
+    else:
+        flash('Database connection error.', 'danger')
+        return redirect(url_for('admin_watchlists'))
+
+    if form.validate_on_submit():
+        if conn: # Re-check conn as it might have been lost or closed
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO watchlist_entries (watchlist_id, license_plate, reason) VALUES (%s, %s, %s)",
+                                (watchlist_id, form.license_plate.data.upper(), form.reason.data))
+                    conn.commit()
+                    flash(f'Plate "{form.license_plate.data.upper()}" added to watchlist "{watchlist_info["name"]}" successfully!', 'success')
+                    return redirect(url_for('admin_watchlist_entries', watchlist_id=watchlist_id))
+            except psycopg2.IntegrityError: # Handles unique (watchlist_id, license_plate) constraint
+                conn.rollback()
+                flash(f'Error: Plate "{form.license_plate.data.upper()}" already exists in this watchlist.', 'danger')
+            except psycopg2.Error as e:
+                conn.rollback()
+                logger.error(f"Error adding watchlist entry: {e}", exc_info=True)
+                flash('Error adding plate to watchlist. Please try again.', 'danger')
+        else:
+            flash('Database connection error while adding plate.', 'danger')
+
+    entries_data = []
+    if conn: # Re-check conn
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, license_plate, reason, added_at FROM watchlist_entries WHERE watchlist_id = %s ORDER BY license_plate ASC", (watchlist_id,))
+                entries_data = [dict(zip([column[0] for column in cur.description], row)) for row in cur.fetchall()]
+        except psycopg2.Error as e:
+            logger.error(f"Error fetching watchlist entries (Watchlist ID: {watchlist_id}): {e}", exc_info=True)
+            flash('Error fetching watchlist entries.', 'danger')
+
+    return render_template('admin/admin_watchlist_entries.html', title=f'Entries for {watchlist_info["name"] if watchlist_info else "Watchlist"}',
+                           form=form, entries=entries_data, watchlist=watchlist_info, csrf_form=FlaskForm()) # Pass empty FlaskForm for CSRF in delete forms
+
+# --- Alert Management Routes ---
+@app.route('/admin/alert/acknowledge/<int:alert_id>', methods=['POST'])
+@login_required
+@admin_required
+def admin_acknowledge_alert(alert_id):
+    conn = get_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE alerts SET acknowledged_at = NOW(), acknowledged_by_user_id = %s WHERE id = %s AND acknowledged_at IS NULL",
+                            (current_user.id, alert_id))
+                conn.commit()
+                if cur.rowcount > 0:
+                    flash(f'Alert ID {alert_id} acknowledged successfully.', 'success')
+                    logger.info(f"User {current_user.username} acknowledged alert ID {alert_id}.")
+                else:
+                    flash(f'Alert ID {alert_id} was already acknowledged or not found.', 'warning')
+        except psycopg2.Error as e:
+            conn.rollback()
+            logger.error(f"Error acknowledging alert ID {alert_id}: {e}", exc_info=True)
+            flash('Error acknowledging alert. Please try again.', 'danger')
+    else:
+        flash('Database connection error.', 'danger')
+    return redirect(request.referrer or url_for('admin_dashboard'))
+
+@app.route('/admin/alerts')
+@login_required
+@admin_required
+def admin_all_alerts():
+    conn = get_db()
+    all_alerts_data = []
+    # Basic form for CSRF in acknowledge buttons on this page too
+    csrf_form_alerts = FlaskForm()
+
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                query = """
+                    SELECT
+                        a.id as alert_id, a.alert_time, a.acknowledged_at,
+                        u.username as acknowledged_by_username,
+                        dp.license_plate, dp.id as detection_id,
+                        wl.name as watchlist_name, wle.reason as watchlist_reason,
+                        dp.image_filename as plate_image_filename
+                    FROM alerts a
+                    JOIN detected_plates dp ON a.detection_id = dp.id
+                    JOIN watchlists wl ON a.watchlist_id = wl.id
+                    JOIN watchlist_entries wle ON a.watchlist_entry_id = wle.id
+                    LEFT JOIN users u ON a.acknowledged_by_user_id = u.id
+                    ORDER BY a.alert_time DESC;
+                """
+                cur.execute(query)
+                fetched_alerts = cur.fetchall()
+                if fetched_alerts:
+                    colnames = [desc[0] for desc in cur.description]
+                    all_alerts_data = [dict(zip(colnames, row)) for row in fetched_alerts]
+                logger.info(f"Admin {current_user.username} fetched {len(all_alerts_data)} alerts for the all alerts page.")
+        except psycopg2.Error as e:
+            logger.error(f"Error fetching all alerts: {e}", exc_info=True)
+            flash('Could not retrieve full alert list due to a database error.', 'danger')
+    else:
+        flash('Database connection not available to load all alerts.', 'danger')
+
+    return render_template('admin/admin_all_alerts.html', title='All System Alerts',
+                           alerts=all_alerts_data, csrf_form=csrf_form_alerts)
 
 # --- Main Execution ---
 if __name__ == '__main__':

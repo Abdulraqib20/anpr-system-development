@@ -804,13 +804,60 @@ class ANPRProcessor:
                      vehicle_type, vehicle_color, car_brand, time_of_day, day_of_week, image_filename,
                      annotated_frame_filename)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, license_plate; -- Return id and license_plate of inserted row
                 """
-                cursor.executemany(sql_insert, records_to_insert)
-                conn.commit()
-                rows_affected = cursor.rowcount
-                logger.info(f"Database commit successful. Rows affected: {rows_affected}")
+                # Use executemany for batch insert, but we need to handle RETURNING for each row if possible
+                # For simplicity with RETURNING and alert generation, let's insert one by one if executemany with RETURNING is complex
+                # Or, fetch IDs after a batch insert if alert generation can be a separate step.
+                # Let's iterate and insert one by one to get the ID immediately for alert checking.
+
+                inserted_detection_ids_and_plates = []
+                for record in records_to_insert:
+                    cursor.execute(sql_insert, record)
+                    inserted_row = cursor.fetchone() # Get the returned id and license_plate
+                    if inserted_row:
+                        inserted_detection_ids_and_plates.append({'id': inserted_row[0], 'license_plate': inserted_row[1]})
+
+                conn.commit() # Commit after all plate detections are inserted
+                rows_affected = len(inserted_detection_ids_and_plates)
+
+                logger.info(f"Database commit for detected_plates successful. Rows affected: {rows_affected}")
                 if rows_affected > 0:
                     saved_successfully = True
+
+                # --- Check for Watchlist Matches and Create Alerts ---
+                if saved_successfully and inserted_detection_ids_and_plates:
+                    logger.info("Checking for watchlist matches for newly inserted detections...")
+                    for det_info in inserted_detection_ids_and_plates:
+                        detection_id = det_info['id']
+                        detected_plate_text = det_info['license_plate']
+
+                        # Find matching watchlist entries for the detected plate
+                        cursor.execute("""
+                            SELECT wl.id as watchlist_id, wle.id as watchlist_entry_id, wl.name as watchlist_name
+                            FROM watchlist_entries wle
+                            JOIN watchlists wl ON wle.watchlist_id = wl.id
+                            WHERE wl.is_active = TRUE AND wle.license_plate = %s;
+                        """, (detected_plate_text,))
+                        matches = cursor.fetchall()
+
+                        if matches:
+                            for match in matches:
+                                watchlist_id, watchlist_entry_id, watchlist_name = match
+                                try:
+                                    cursor.execute("""
+                                        INSERT INTO alerts (detection_id, watchlist_id, watchlist_entry_id)
+                                        VALUES (%s, %s, %s)
+                                        ON CONFLICT (detection_id, watchlist_entry_id) DO NOTHING;
+                                    """, (detection_id, watchlist_id, watchlist_entry_id))
+                                    logger.info(f"ALERT Generated: Plate '{detected_plate_text}' (Detection ID: {detection_id}) matched watchlist '{watchlist_name}' (Entry ID: {watchlist_entry_id}).")
+                                except psycopg2.Error as alert_e:
+                                    logger.error(f"Error inserting alert for detection {detection_id}, plate {detected_plate_text}, watchlist entry {watchlist_entry_id}: {alert_e}", exc_info=True)
+                                    # conn.rollback() # Might not want to rollback everything for an alert error
+                        else:
+                            logger.debug(f"No active watchlist match for plate '{detected_plate_text}' (Detection ID: {detection_id}).")
+                        conn.commit() # Commit any alerts created
+                    # ----------------------------------------------------
 
         except Exception as e:
             logger.error(f"Database error: {str(e)}", exc_info=True)

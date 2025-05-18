@@ -269,6 +269,7 @@
                             <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userActionsDropdown">
                                 {% if current_user.is_admin() %}
                                 <li><a class="dropdown-item" href="{{ url_for('admin_dashboard') }}"><i class="bi bi-person-gear me-2"></i>Admin Panel</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('admin_watchlists') }}"><i class="bi bi-list-task me-2"></i>Watchlists</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('admin_detection_analytics') }}"><i class="bi bi-bar-chart-line-fill me-2"></i>Detection Analytics</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('admin_usage_metrics') }}"><i class="bi bi-graph-up-arrow me-2"></i>API Usage</a></li>
                                 <li><hr class="dropdown-divider"></li>

@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% import "_form_macros.html" as fM %}
 
 {% block title %}{{ title }} - ANPR System{% endblock %}
 
@@ -17,6 +18,53 @@
         margin-bottom: 0.5rem;
         display: block;
         color: var(--bs-primary);
+    }
+    .dashboard-card {
+        transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        height: 100%; /* Ensure cards in a row have same height if content differs */
+    }
+    .dashboard-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important;
+    }
+    .dashboard-card .card-body {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+    }
+    .dashboard-card .card-title i {
+        font-size: 2.5rem; /* Larger icons for cards */
+        margin-bottom: 0.5rem;
+        display: block;
+    }
+    .alert-card {
+        border-left: 5px solid var(--bs-danger);
+    }
+    .alert-item {
+        border-bottom: 1px solid var(--bs-border-color-translucent);
+        padding-bottom: 0.75rem;
+        margin-bottom: 0.75rem;
+    }
+    .alert-item:last-child {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+    }
+    .alert-item strong {
+        color: var(--bs-emphasis-color);
+    }
+    .plate-img-thumbnail {
+        max-height: 40px;
+        max-width: 100px;
+        object-fit: cover;
+        border-radius: .25rem;
+    }
+    .watchlist-alert-details span {
+        display: inline-block;
+        margin-right: 10px;
+        font-size: 0.9em;
     }
 </style>
 {% endblock %}
@@ -40,6 +88,61 @@
         {% endif %}
     {% endwith %}
 
+    <!-- Unacknowledged Alerts Section -->
+    {% if unacknowledged_alerts %}
+    <div class="card alert-card shadow-sm mb-4">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0"><i class="bi bi-exclamation-triangle-fill me-2"></i>Priority Alerts: Unacknowledged Watchlist Matches</h5>
+        </div>
+        <div class="card-body">
+            {% for alert in unacknowledged_alerts %}
+            <div class="alert-item">
+                <div class="row align-items-center">
+                    <div class="col-md-1 text-center">
+                        {% if alert.plate_image_filename %}
+                            <img src="{{ url_for('serve_plate_image', filename=alert.plate_image_filename) }}" alt="Plate {{ alert.license_plate }}" class="img-thumbnail plate-img-thumbnail mb-2 mb-md-0">
+                        {% else %}
+                            <i class="bi bi-camera-video-off fs-3 text-muted"></i>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-7">
+                        <h6 class="mb-1">
+                            <span class="badge bg-danger">ALERT</span>
+                            Plate: <strong>{{ alert.license_plate }}</strong> detected!
+                        </h6>
+                        <p class="mb-1 small watchlist-alert-details">
+                            <span><i class="bi bi-list-check"></i> Watchlist: <strong>{{ alert.watchlist_name }}</strong></span>
+                            <span><i class="bi bi-info-circle"></i> Reason: <em>{{ alert.watchlist_reason | default('N/A', true) }}</em></span>
+                        </p>
+                        <p class="mb-1 small text-muted">
+                            <i class="bi bi-clock-fill"></i> Alert Time: {{ alert.alert_time.strftime('%Y-%m-%d %H:%M:%S') if alert.alert_time else 'N/A' }}
+                        </p>
+                        <p class="mb-0 small text-muted">
+                            Vehicle: {{ alert.vehicle_type | default('N/A', true) | title }} / {{ alert.vehicle_color | default('N/A', true) | title }}
+                        </p>
+                    </div>
+                    <div class="col-md-4 text-md-end mt-2 mt-md-0">
+                        <a href="{{ url_for('index', search=alert.license_plate) }}#detection-id-{{ alert.detection_id }}" class="btn btn-sm btn-primary me-2" title="View Detection Details">
+                            <i class="bi bi-search"></i> View Detection
+                        </a>
+                        <form method="POST" action="{{ url_for('admin_acknowledge_alert', alert_id=alert.alert_id) }}" class="d-inline">
+                             {{ csrf_form.hidden_tag() }}
+                            <button type="submit" class="btn btn-sm btn-success" title="Acknowledge Alert">
+                                <i class="bi bi-check-lg"></i> Acknowledge
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+            <div class="text-center mt-3">
+                 <a href="{{ url_for('admin_all_alerts') }}" class="btn btn-outline-primary btn-sm">View All Alerts <i class="bi bi-arrow-right-short"></i></a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    <!-- End Unacknowledged Alerts Section -->
+
     <div class="row">
         <div class="col-md-6 col-lg-4 mb-4">
             <a href="{{ url_for('admin_manage_users') }}" class="text-decoration-none">
@@ -60,6 +163,18 @@
                         <i class="bi bi-graph-up-arrow"></i>
                         <h5 class="card-title">API Usage Metrics</h5>
                         <p class="card-text small text-muted">View Groq API token usage statistics.</p>
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <div class="col-md-6 col-lg-4 mb-4">
+            <a href="{{ url_for('admin_watchlists') }}" class="text-decoration-none">
+                <div class="card admin-card shadow-sm h-100">
+                    <div class="card-body text-center">
+                        <i class="bi bi-list-task"></i> {# Or bi-eye-fill, bi-shield-check, etc. #}
+                        <h5 class="card-title">Manage Watchlists</h5>
+                        <p class="card-text small text-muted">Create, view, and manage license plate watchlists and their entries.</p>
                     </div>
                 </div>
             </a>
@@ -89,4 +204,15 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+// Optional: Add JavaScript for any dynamic behavior on the dashboard if needed.
+// e.g., real-time alert updates, though that would require more complex setup (WebSockets or polling).
+
+// Ensure CSRF token is available for forms that might be added dynamically or don't use Flask-WTF macros explicitly
+const csrfToken = "{{ csrf_form.csrf_token._value() }}";
+
+</script>
 {% endblock %}
