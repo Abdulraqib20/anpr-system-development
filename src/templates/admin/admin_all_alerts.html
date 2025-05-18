@@ -86,18 +86,18 @@
                                     -
                                 {% endif %}
                             </td>
-                            <td class="text-end action-buttons">
-                                <a href="{{ url_for('index', search=alert.license_plate) }}#detection-id-{{ alert.detection_id }}" class="btn btn-xs btn-outline-primary" title="View Original Detection">
-                                    <i class="bi bi-search"></i> View Detection
-                                </a>
+                            <td class="action-buttons text-end">
                                 {% if not alert.acknowledged_at %}
-                                <form method="POST" action="{{ url_for('admin_acknowledge_alert', alert_id=alert.alert_id) }}" class="d-inline">
-                                    {{ csrf_form.hidden_tag() }}
-                                    <button type="submit" class="btn btn-xs btn-success" title="Acknowledge this Alert">
-                                        <i class="bi bi-check-lg"></i> Acknowledge
-                                    </button>
-                                </form>
+                                    <form method="POST" action="{{ url_for('admin_acknowledge_alert', alert_id=alert.alert_id) }}" class="d-inline me-1">
+                                        {{ csrf_form.hidden_tag() }}
+                                        <button type="submit" class="btn btn-sm btn-success" title="Acknowledge Alert">
+                                            <i class="bi bi-check-lg"></i> <span class="d-none d-md-inline">Acknowledge</span>
+                                        </button>
+                                    </form>
                                 {% endif %}
+                                <a href="{{ url_for('index', search=alert.license_plate) }}#detection-{{ alert.detection_id }}" class="btn btn-sm btn-primary" title="View Detection Details">
+                                    <i class="bi bi-search"></i> <span class="d-none d-md-inline">View Detection</span>
+                                </a>
                             </td>
                         </tr>
                         {% endfor %}

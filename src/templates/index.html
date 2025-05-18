@@ -122,7 +122,7 @@
         <!-- Search Filter Input - No longer a form -->
         <div class="col-md-4">
             <input type="text" id="plateSearchInput" class="form-control form-control-sm"
-                   placeholder="Filter by license plate...">
+                   placeholder="Filter by license plate..." value="{{ search_query | default('', true) }}">
         </div>
     </div>
     <div class="card-body">
@@ -766,10 +766,9 @@
 
     // --- Data Fetching and Updating ---
     function fetchAndUpdateData(showNotification = false) {
-        console.log("Checking for new detections...");
-        // Optional: Add a subtle loading indicator specific to polling?
-
-        fetch(API_DETECTIONS_URL)
+        console.log("Fetching/Updating detections. Show notification:", showNotification);
+        // Ensure this function returns the promise chain
+        return fetch(API_DETECTIONS_URL)
             .then(response => {
                 if (!response.ok) {
                     return response.text().then(text => { throw new Error(`HTTP error ${response.status}: ${text}`) });
@@ -782,20 +781,25 @@
                 }
             })
             .then(data => {
+                console.log("Data received from API:", data);
                 if (data.error) {
                     throw new Error(`API Error: ${data.error}`);
                 }
                 const newDetections = data.detections || [];
 
-                // Basic check: If number of detections changed, update.
-                // More robust: Compare actual content if needed (more complex)
-                if (newDetections.length !== allDetections.length) {
-                    console.log(`Data updated. Old count: ${allDetections.length}, New count: ${newDetections.length}`);
+                // Update logic: Re-render if new data is different or if it's the initial load with data.
+                let needsRender = false;
+                if (allDetections.length === 0 && newDetections.length > 0) { // Initial load with data
+                    needsRender = true;
+                } else if (JSON.stringify(allDetections) !== JSON.stringify(newDetections)) { // Data content has changed
+                    needsRender = true;
+                }
+
+                if (needsRender) {
+                    console.log(`Data has changed or initial data loaded. Old count: ${allDetections.length}, New count: ${newDetections.length}. Triggering table update.`);
                     allDetections = newDetections;
-                    // Update total count stat
                     if(totalDetectionsStat) totalDetectionsStat.textContent = allDetections.length;
 
-                    // --- Calculate and Update Today's Detections --- Start
                     if (todayDetectionsStat) {
                         const today = new Date().toISOString().split('T')[0];
                         let countToday = 0;
@@ -805,18 +809,12 @@
                             }
                         });
                         todayDetectionsStat.textContent = countToday;
-                        console.log(`Calculated today's detections: ${countToday}`);
                     }
-                    // --- Calculate and Update Today's Detections --- End
-
-                    // --- Populate Car Brand Filter --- Start
                     if (filterCarBrand) {
                         const uniqueBrands = [...new Set(allDetections.map(det => det.car_brand).filter(brand => brand && brand.toLowerCase() !== 'unknown'))]
                                             .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-
-                        // Preserve current selection if still valid, otherwise reset
                         const currentFilterValue = filterCarBrand.value;
-                        filterCarBrand.innerHTML = '<option value="">All Brands</option>'; // Reset
+                        filterCarBrand.innerHTML = '<option value="">All Brands</option>';
                         uniqueBrands.forEach(brand => {
                             const option = document.createElement('option');
                             option.value = brand;
@@ -827,36 +825,26 @@
                             filterCarBrand.value = currentFilterValue;
                         }
                     }
-                    // --- Populate Car Brand Filter --- End
-
-                    // Re-apply filters and sorting to the new data and render
-                    applyFilterAndSort();
-
-                    // Show notification if requested (e.g., after successful upload)
+                    applyFilterAndSort(); // This renders the table
                     if (showNotification) {
                         showUploadResult('info', 'Detections table updated.');
                     }
-
-                    // Optional: Show a brief notification that data was updated?
                 } else {
-                    console.log("No change in detection count.");
+                    console.log("No significant change in detection data. Table not re-rendered.");
                 }
 
-                // Ensure UI elements are correctly shown/hidden after initial load or update
                 if(loadingIndicator) loadingIndicator.style.display = 'none';
                 if(tableContainer) tableContainer.classList.remove('js-hide-until-load');
-                if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load'); // Hide error on successful fetch
-                // Pagination container visibility is handled by renderPaginationControls inside applyFilterAndSort
-
+                if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
             })
             .catch(error => {
-                console.error('Error fetching or processing detections during update:', error);
-                // Decide how to handle errors during polling - maybe show a less intrusive error?
-                if(loadingIndicator) loadingIndicator.style.display = 'none'; // Hide main loader anyway
-                if(tableErrorPlaceholder && !tableContainer.classList.contains('js-hide-until-load')) { // Only show error if table was visible
+                console.error('Error fetching or processing detections:', error);
+                if(loadingIndicator) loadingIndicator.style.display = 'none';
+                if(tableErrorPlaceholder) {
                     tableErrorPlaceholder.classList.remove('js-hide-until-load');
-                    if(tableErrorMessage) tableErrorMessage.textContent = `Failed to fetch updates. Error: ${error.message}`;
+                    if(tableErrorMessage) tableErrorMessage.textContent = `Failed to fetch detections. Error: ${error.message}`;
                 }
+                throw error; // Re-throw to allow chained .catch
             });
     }
 
@@ -917,7 +905,7 @@
         uploadResult.innerHTML = '';
         uploadProgressContainer.style.height = 'auto';
         uploadProgressBar.style.width = '0%';
-        uploadProgressBar.classList.remove('bg-success', 'bg-danger', 'progress-bar-animated');
+        uploadProgressBar.classList.remove('bg-success', 'bg-danger');
         uploadProgressBar.textContent = '';
         uploadStatus.textContent = `Starting upload of ${totalFiles} file(s).`;
 
@@ -1107,7 +1095,15 @@
         if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
         if(noDetectionsMessage) noDetectionsMessage.classList.add('js-hide-until-load');
 
-        fetchAndUpdateData();
+        fetchAndUpdateData(false) // false = don't show "table updated" notification
+            .then(() => {
+                console.log("Initial data fetch and processing completed. Attempting to handle highlight.");
+                handleDetectionHighlight();
+            })
+            .catch(initialError => {
+                console.error("Error during initial data load sequence (affecting highlighting):", initialError);
+                // Error is already logged by fetchAndUpdateData, this is an additional catch for the sequence.
+            });
 
         // Add search listener (client-side filtering)
         if (searchInput) {
@@ -1160,7 +1156,59 @@
          }
 
         // Start polling for updates after initial load
-        setInterval(fetchAndUpdateData, POLLING_INTERVAL_MS);
+        setInterval(() => fetchAndUpdateData(false), POLLING_INTERVAL_MS); // Poll without user notification
+
+        // --- Handle URL Fragment for Highlighting Detection --- Start ---
+        function handleDetectionHighlight() {
+            const hash = window.location.hash;
+            console.log("[Highlight] handleDetectionHighlight called. Current hash:", hash);
+            if (hash && hash.startsWith('#detection-')) {
+                const detectionIdToHighlight = hash.substring(10); // Remove '#detection-'
+                console.log("[Highlight] Extracted detectionIdToHighlight *VALUE*:", detectionIdToHighlight, "(Type:", typeof detectionIdToHighlight, ")");
+
+                console.log("[Highlight] Attempting to highlight detection ID from hash (original log format):", detectionIdToHighlight);
+
+                if (detectionIdToHighlight) {
+                    // Wait for the next paint cycle to ensure DOM is more likely to be ready
+                    requestAnimationFrame(() => {
+                        // A small additional delay can sometimes help ensure all rendering is complete
+                        setTimeout(() => {
+                            console.log(`[Highlight] Inside highlight timeout (after requestAnimationFrame). Searching for row with data-detection-id: ${detectionIdToHighlight}`);
+                            console.log("[Highlight] Current searchInput value:", searchInput ? searchInput.value : "N/A");
+                            console.log("[Highlight] Current filteredDetections count:", filteredDetections.length);
+                            // console.log("[Highlight] First 5 filtered IDs:", filteredDetections.slice(0,5).map(d => d.id));
+
+                            const rowToHighlight = document.querySelector(`tr[data-detection-id="${detectionIdToHighlight}"]`);
+                            if (rowToHighlight) {
+                                console.log("[Highlight] Row found:", rowToHighlight, "Scrolling and highlighting.");
+                                rowToHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                rowToHighlight.classList.add('table-info'); // Bootstrap class for temporary highlight
+                                console.log("[Highlight] Applied .table-info. Current classes:", rowToHighlight.className);
+
+                                setTimeout(() => {
+                                    rowToHighlight.classList.remove('table-info');
+                                    console.log("[Highlight] Removed .table-info. Current classes:", rowToHighlight.className);
+                                    // history.pushState("", document.title, window.location.pathname + window.location.search); // Optional: clear hash
+                                }, 5000); // Remove highlight after 5 seconds
+                            } else {
+                                console.warn(`[Highlight] Row with data-detection-id "${detectionIdToHighlight}" not found in the DOM.`);
+                                const existsInAll = allDetections.find(d => String(d.id) === String(detectionIdToHighlight));
+                                if (existsInAll) {
+                                    console.warn("[Highlight] Detection ID exists in allDetections, but not in current filtered view. Check table filter criteria.");
+                                } else {
+                                    console.warn("[Highlight] Detection ID does not exist in allDetections data either.");
+                                }
+                            }
+                        }, 100); // 100ms delay after animation frame
+                    });
+                } else {
+                    console.log("[Highlight] No detection ID found in hash after '#detection-'.");
+                }
+            } else {
+                console.log("[Highlight] No relevant hash for detection highlighting.");
+            }
+        }
+        // --- Handle URL Fragment for Highlighting Detection --- End ---
     });
 
 </script>
