@@ -667,7 +667,7 @@
 
                 // Use a more attention-grabbing style for the toast itself
                 const toastHTML = `
-                    <div class="toast shadow-lg" role="alert" aria-live="assertive" aria-atomic="true" id="${toastId}" style="min-width: 350px;">
+                    <div class="toast shadow-lg" role="alert" aria-live="assertive" aria-atomic="true" id="${toastId}" style="min-width: 350px;" data-bs-autohide="true" data-bs-delay="60000">
                         <div class="toast-header bg-danger text-white border-bottom border-light">
                             ${toastHeader}
                         </div>
@@ -676,7 +676,7 @@
                         </div>
                     </div>
                 `;
-                // Increased delay to 25s, added shadow, min-width.
+                // Toasts will now persist until manually closed.
                 // Header: bg-danger, text-white. Body: bg-dark, text-light for contrast.
 
                 toastPlacement.insertAdjacentHTML('beforeend', toastHTML);

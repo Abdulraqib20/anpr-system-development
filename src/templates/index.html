@@ -862,23 +862,53 @@
 
     // --- Upload Handling ---
     function showUploadResult(type, message, append = false) {
-        uploadResult.className = `alert alert-${type} mt-2`; // Ensure margin
+        uploadResult.className = `alert alert-${type} mt-2`;
+        uploadResult.style.display = 'block'; // Ensure parent is visible
+
         if (append) {
-            const newMessage = document.createElement('div');
-            newMessage.innerHTML = message; // Use innerHTML to allow for icons or simple HTML in message
-            uploadResult.appendChild(newMessage);
-        } else {
-            uploadResult.innerHTML = message; // Use innerHTML
-        }
-        uploadResult.style.display = 'block';
-        // Auto-hide general info/success after a delay, errors might persist longer or require manual close
-        if (type === 'info' || type === 'success' && !append) {
-            setTimeout(() => {
-                if (uploadResult.style.display === 'block' && uploadResult.innerHTML === message) {
-                    uploadResult.style.display = 'none';
-                    uploadResult.innerHTML = '';
-                }
-            }, 7000);
+            const newMessageDiv = document.createElement('div');
+            newMessageDiv.innerHTML = message; // Allows for HTML in the message
+            uploadResult.appendChild(newMessageDiv);
+
+            if (type === 'success' || type === 'info') { // Auto-hide appended success/info messages
+                setTimeout(() => {
+                    // Check if the specific message div is still part of the uploadResult
+                    if (uploadResult.contains(newMessageDiv)) {
+                        newMessageDiv.style.transition = 'opacity 0.5s ease-out, max-height 0.5s ease-out, padding 0.5s ease-out, margin 0.5s ease-out';
+                        newMessageDiv.style.opacity = '0';
+                        newMessageDiv.style.maxHeight = '0'; // Animate max-height for collapse effect
+                        newMessageDiv.style.paddingTop = '0';
+                        newMessageDiv.style.paddingBottom = '0';
+                        newMessageDiv.style.marginTop = '0';
+                        newMessageDiv.style.marginBottom = '0';
+                        newMessageDiv.style.overflow = 'hidden'; // Needed for max-height animation
+
+                        setTimeout(() => {
+                            if (uploadResult.contains(newMessageDiv)) {
+                                uploadResult.removeChild(newMessageDiv);
+                                // If no more child divs in uploadResult, hide the parent alert container
+                                if (uploadResult.childElementCount === 0) {
+                                    uploadResult.style.display = 'none';
+                                    uploadResult.className = 'alert mt-3'; // Reset class
+                                }
+                            }
+                        }, 500); // Time for fade out and collapse transition
+                    }
+                }, 4000); // 4 seconds as requested for these messages
+            }
+        } else { // Not appending, replace entire content
+            uploadResult.innerHTML = message;
+            // Existing auto-hide for non-appended info/success messages (original 7s timeout)
+            if (type === 'info' || type === 'success') {
+                setTimeout(() => {
+                    // Only hide if the content hasn't changed (i.e., another message wasn't shown)
+                    if (uploadResult.style.display === 'block' && uploadResult.innerHTML === message) {
+                        uploadResult.style.display = 'none';
+                        uploadResult.innerHTML = '';
+                        uploadResult.className = 'alert mt-3'; // Reset class
+                    }
+                }, 7000);
+            }
         }
     }
 
