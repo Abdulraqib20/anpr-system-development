@@ -243,14 +243,14 @@
 
 <div class="container about-page-content">
     <section id="project-overview" class="overview-section mb-0">
-        <h2 class="section-heading">Project Overview</h2>
+        <h2 class="section-heading" style="color: #333; text-shadow: 0 0 5px #fff, 0 0 10px #fff, 0 0 15px #fff; border-radius: 8px; text-align: center;">Project Overview</h2>
         <div class="card shadow-sm">
             <div class="card-body p-lg-5">
                 <div class="row align-items-center">
                     <div class="col-lg-7 mb-4 mb-lg-0">
                         <p class="text-muted mb-4" style="font-size: 1.05rem; line-height: 1.8;">
                             The <strong>AI-Powered Automatic Number Plate Recognition (ANPR) System</strong> is a sophisticated solution leveraging the power of Artificial Intelligence
-                            for advanced vehicle identification and security management. Developed as a capstone final-year project at the
+                            for advanced vehicle identification and security management. Developed as a capstone computer engineering final-year project at the
                             University of Ilorin, this system integrates Artificial Intelligence and cutting-edge computer vision with modern web technologies
                             to deliver a robust, scalable, and user-friendly platform for automated license plate recognition and
                             vehicle attribute analysis including type and brand detection.
@@ -269,12 +269,12 @@
                             <div class="timeline-point">
                                 <div class="timeline-icon"><i class="bi bi-shield-lock-fill"></i></div>
                                 <h5>Security & Privacy Focus</h5>
-                                <p>Features robust user authentication, role-based access, secure data handling practices, and emphasizes data integrity and privacy in all captured vehicle information.</p>
+                                <p>Features robust user authentication with Flask-Login, role-based access, CSRF protection with Flask-WTF, secure data handling practices, and emphasizes data integrity and privacy in all captured vehicle information.</p>
                             </div>
                             <div class="timeline-point">
                                 <div class="timeline-icon"><i class="bi bi-graph-up-arrow"></i></div>
                                 <h5>Performance & Scalability</h5>
-                                <p>Engineered for high accuracy in diverse conditions, efficient real-time data processing, and designed with scalability in mind to handle growing datasets and user demands.</p>
+                                <p>Engineered for high accuracy in diverse conditions, efficient real-time data processing, real-time admin alerts via Flask-SocketIO, and designed with scalability in mind to handle growing datasets and user demands.</p>
                             </div>
                         </div>
                     </div>
@@ -289,8 +289,11 @@
                                     <span class="badge text-bg-success">YOLOv8</span>
                                     <span class="badge text-bg-info">PostgreSQL</span>
                                     <span class="badge text-bg-warning">OpenCV</span>
-                                    <span class="badge text-dark" style="background-color: #00ff9d;">Groq API</span>
-                                    <span class="badge text-bg-danger">Large Vision Models</span>
+                                    <span class="badge text-dark" style="background-color: #00ff9d;">Groq API (Llama Vision)</span>
+                                    <span class="badge text-bg-danger">Flask-Login</span>
+                                    <span class="badge text-bg-primary">Flask-WTF</span>
+                                    <span class="badge text-bg-info">Socket.IO</span>
+                                    <span class="badge text-bg-success">Chart.js</span>
                                     <span class="badge text-bg-light">Bootstrap 5</span>
                                     <span class="badge text-bg-dark">JavaScript</span>
                                 </div>
@@ -303,7 +306,7 @@
     </section>
 
     <section id="key-features">
-        <h2 class="section-heading">Key Features</h2>
+        <h2 class="section-heading">System Features</h2>
         <div class="row">
             <div class="col-lg-4 col-md-6 mb-4">
                 <div class="feature-card-v2">
@@ -315,15 +318,57 @@
             <div class="col-lg-4 col-md-6 mb-4">
                 <div class="feature-card-v2">
                     <div class="icon"><i class="bi bi-lightning-charge-fill"></i></div>
-                    <h5>Ultra-Fast Llama Vision OCR</h5>
-                    <p>Utilizes Groq's LPU Inference Engine with Meta's Llama Vision models for near-instantaneous and reliable character recognition.</p>
+                    <h5>Ultra-Fast Llama Vision OCR & Analytics</h5>
+                    <p>Utilizes Groq's LPU Inference Engine with Meta's Llama Vision models for near-instantaneous character recognition and car brand identification.</p>
+                </div>
+            </div>
+             <div class="col-lg-4 col-md-6 mb-4">
+                <div class="feature-card-v2">
+                    <div class="icon"><i class="bi bi-people-fill"></i></div>
+                    <h5>Secure User Access & Roles</h5>
+                    <p>Implements comprehensive role-based authentication (Admin/User) with Flask-Login and CSRF protection via Flask-WTF for secure operations.</p>
                 </div>
             </div>
             <div class="col-lg-4 col-md-6 mb-4">
                 <div class="feature-card-v2">
-                    <div class="icon"><i class="bi bi-bounding-box-circles"></i></div>
-                    <h5>Car Brand Identification</h5>
-                    <p>Integrates AI-powered car brand detection, adding another layer of vehicle analytics.</p>
+                    <div class="icon"><i class="bi bi-list-stars"></i></div>
+                    <h5>Comprehensive Watchlist System</h5>
+                    <p>Manage watchlists of interest, add license plate entries with reasons, and activate/deactivate lists for targeted monitoring.</p>
+                </div>
+            </div>
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="feature-card-v2">
+                    <div class="icon"><i class="bi bi-bell-fill"></i></div>
+                    <h5>Real-time Alerting & Notifications</h5>
+                    <p>Receive instant on-screen toast notifications for high-priority events, such as watchlist matches, powered by Socket.IO.</p>
+                </div>
+            </div>
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="feature-card-v2">
+                    <div class="icon"><i class="bi bi-check2-square"></i></div>
+                    <h5>Alert Management Dashboard</h5>
+                    <p>Admins can view all system-generated alerts (both active and acknowledged) and mark them as handled, maintaining an audit trail.</p>
+                </div>
+            </div>
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="feature-card-v2">
+                    <div class="icon"><i class="bi bi-sliders"></i></div>
+                    <h5>Advanced Admin Controls</h5>
+                    <p>Centralized dashboard for system overview, user role management, detection record deletion, and access to various analytics sections.</p>
+                </div>
+            </div>
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="feature-card-v2">
+                    <div class="icon"><i class="bi bi-pie-chart-fill"></i></div>
+                    <h5>Detection Analytics & Reporting</h5>
+                    <p>Visualize detection trends with interactive charts (using Chart.js) for vehicle types, colors, and activity by time of day/day of week.</p>
+                </div>
+            </div>
+            <div class="col-lg-4 col-md-6 mb-4">
+                <div class="feature-card-v2">
+                    <div class="icon"><i class="bi bi-shield-lock"></i></div> <!-- Changed icon to shield-lock -->
+                    <h5>Enhanced UI Security</h5>
+                    <p>Custom confirmation modals for critical actions (e.g., deletions) and system-wide CSRF protection to prevent common web vulnerabilities.</p>
                 </div>
             </div>
             <div class="col-lg-4 col-md-6 mb-4">
@@ -331,13 +376,6 @@
                     <div class="icon"><i class="bi bi-server"></i></div>
                     <h5>Robust Data Management</h5>
                     <p>Securely stores and manages all detection data, including images, timestamps, and recognized details in PostgreSQL.</p>
-                </div>
-            </div>
-            <div class="col-lg-4 col-md-6 mb-4">
-                <div class="feature-card-v2">
-                    <div class="icon"><i class="bi bi-people-fill"></i></div>
-                    <h5>Secure User Access</h5>
-                    <p>Implements comprehensive role-based authentication (Admin/User) for secure operations and data protection.</p>
                 </div>
             </div>
             <div class="col-lg-4 col-md-6 mb-4">
@@ -351,14 +389,14 @@
                 <div class="feature-card-v2">
                     <div class="icon"><i class="bi bi-images"></i></div>
                     <h5>Multiple Image Uploads</h5>
-                    <p>Supports batch processing of images through both the web UI and command-line interface.</p>
+                    <p>Supports batch processing of images through both the web UI (admin-only) and command-line interface.</p>
                 </div>
             </div>
              <div class="col-lg-4 col-md-6 mb-4">
                 <div class="feature-card-v2">
                     <div class="icon"><i class="bi bi-pc-display-horizontal"></i></div>
                     <h5>Responsive Interface</h5>
-                    <p>A clean, modern, and fully responsive user interface for seamless access across devices.</p>
+                    <p>A clean, modern, and fully responsive user interface for seamless access across devices, built with Bootstrap 5.</p>
                 </div>
             </div>
              <div class="col-lg-4 col-md-6 mb-4">
