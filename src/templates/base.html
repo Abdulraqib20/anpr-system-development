@@ -603,17 +603,29 @@
             const plateImageUrlBase = "{{ url_for('serve_plate_image', filename='') }}";
             const detectionIndexUrlBase = "{{ url_for('index') }}"; // Base for linking to specific detections
             const toastPlacement = document.getElementById('toastPlacement');
+            const alertSoundElement = document.getElementById('toastAlertSound'); // Get the audio element
             let toastCounter = 0;
+            let activeSoundingToasts = new Set(); // Keep track of toasts that should be playing sound
 
             function playAlertSound() {
-                // In a real app, you might have an <audio> element or use Web Audio API
-                // For simplicity, we'll just log. Add your sound logic here.
-                console.log("Playing alert sound (placeholder)...");
-                // Example:
-                // const alertSound = document.getElementById('alertSoundElement');
-                // if (alertSound) {
-                //    alertSound.play().catch(e => console.warn("Error playing sound:", e));
-                // }
+                if (alertSoundElement) {
+                    alertSoundElement.loop = true;
+                    if (alertSoundElement.paused) { // Only play if not already playing
+                        alertSoundElement.play().catch(error => {
+                            console.warn("Error playing alert sound:", error);
+                        });
+                    }
+                } else {
+                    console.warn("Alert sound element not found.");
+                }
+            }
+
+            function stopAlertSound() {
+                if (alertSoundElement) {
+                    alertSoundElement.pause();
+                    alertSoundElement.currentTime = 0;
+                    alertSoundElement.loop = false;
+                }
             }
 
             function showToastNotification(alertData) {
@@ -667,7 +679,7 @@
 
                 // Use a more attention-grabbing style for the toast itself
                 const toastHTML = `
-                    <div class="toast shadow-lg" role="alert" aria-live="assertive" aria-atomic="true" id="${toastId}" style="min-width: 350px;" data-bs-autohide="true" data-bs-delay="60000">
+                    <div class="toast shadow-lg" role="alert" aria-live="assertive" aria-atomic="true" id="${toastId}" style="min-width: 350px;" data-bs-autohide="true" data-bs-delay="120000">
                         <div class="toast-header bg-danger text-white border-bottom border-light">
                             ${toastHeader}
                         </div>
@@ -685,9 +697,16 @@
                 if (toastElement) {
                     const toastInstance = new bootstrap.Toast(toastElement);
                     toastInstance.show();
+
+                    // Add to active sounding toasts and play sound
+                    activeSoundingToasts.add(toastId);
                     playAlertSound();
 
                     toastElement.addEventListener('hidden.bs.toast', function () {
+                        activeSoundingToasts.delete(toastId);
+                        if (activeSoundingToasts.size === 0) {
+                            stopAlertSound();
+                        }
                         toastElement.remove(); // Clean up from DOM
                     });
                 } else {
@@ -852,6 +871,9 @@
         </div>
     </div>
     <!-- End Confirmation Modal -->
+
+    <!-- Audio element for toast notifications -->
+    <audio id="toastAlertSound" src="{{ url_for('static', filename='sounds/beep-125033.mp3') }}" preload="auto"></audio>
 
     <!-- Custom JS -->
     {% block scripts_extra %}{% endblock %}
