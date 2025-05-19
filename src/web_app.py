@@ -1567,7 +1567,7 @@ def handle_connect():
         logger.info(f"User (SID: {request.sid}, Authenticated: {current_user.is_authenticated}) connected but not added to admin room.")
 
 @socketio.on('disconnect')
-def handle_disconnect():
+def handle_disconnect(*args, **kwargs):
     # Leaving rooms on disconnect is often handled automatically by Flask-SocketIO,
     # but explicit leave_room can be used if needed.
     # We can log the disconnect.

@@ -640,56 +640,74 @@
 
                 let plateImageHTML = '';
                 if (alertData.plate_image_filename) {
-                    plateImageHTML = `<img src="${plateImageUrlBase}${alertData.plate_image_filename}" class="rounded me-2" alt="Plate ${alertData.plate_text}" style="width: 60px; height: 30px; object-fit: cover; border: 1px solid #fff;">`;
+                    plateImageHTML = `<img src="${plateImageUrlBase}${alertData.plate_image_filename}" class="rounded me-2" alt="Plate ${alertData.plate_text}" style="width: 70px; height: 35px; object-fit: cover; border: 1px solid rgba(255,255,255,0.5);">`;
                 } else {
-                    plateImageHTML = `<span class="me-2 p-2 bg-light text-dark rounded d-inline-flex align-items-center justify-content-center" style="width: 60px; height: 30px;"><i class="bi bi-image-alt fs-5"></i></span>`;
+                    plateImageHTML = `<span class="me-2 p-2 bg-light text-dark rounded d-inline-flex align-items-center justify-content-center" style="width: 70px; height: 35px;"><i class="bi bi-image-alt fs-4"></i></span>`;
                 }
 
-                // More prominent header
-                const toastHeader = `
+                const toastHeaderHTML = `
                     <div class="d-flex align-items-center">
                         ${plateImageHTML}
                         <div class="ms-2 flex-grow-1">
-                            <strong class="me-auto text-white"><i class="bi bi-shield-exclamation me-2 fs-5"></i>ALERT: ${alertData.plate_text || 'N/A'}</strong>
+                            <strong class="me-auto text-white" style="font-size: 1.1rem;"><i class="bi bi-shield-exclamation me-2"></i>${alertData.plate_text || 'N/A'}</strong>
                         </div>
-                        <small class="text-white-50 ms-3">${timeString}</small>
+                        <small class="text-white-50 ms-3" style="font-size: 0.8rem;">${timeString}</small>
                         <button type="button" class="btn-close btn-close-white ms-2" data-bs-dismiss="toast" aria-label="Close"></button>
                     </div>
                 `;
 
-                let toastBodyContent = `
-                    <div class="row gx-2">
-                        <div class="col-auto"><i class="bi bi-bookmark-star-fill text-warning"></i> <strong>Watchlist:</strong></div>
-                        <div class="col">${alertData.watchlist_name || 'N/A'}</div>
+                let vehicleDetailsHTML = '';
+                if (alertData.vehicle_type && alertData.vehicle_type.toLowerCase() !== 'unknown' || alertData.vehicle_color && alertData.vehicle_color.toLowerCase() !== 'unknown') {
+                    vehicleDetailsHTML += '<hr class="my-2" style="border-color: var(--bs-border-color-translucent);">';
+                    vehicleDetailsHTML += '<div class="row gx-2 small">';
+                    if (alertData.vehicle_type && alertData.vehicle_type.toLowerCase() !== 'unknown') {
+                        vehicleDetailsHTML += `
+                            <div class="col-auto"><i class="bi bi-car-front-fill me-1" style="color: var(--bs-info);"></i><strong style="color: var(--bs-emphasis-color);">Type:</strong></div>
+                            <div class="col" style="color: var(--bs-body-color);">${alertData.vehicle_type}</div>
+                        `;
+                    }
+                    if (alertData.vehicle_color && alertData.vehicle_color.toLowerCase() !== 'unknown') {
+                        vehicleDetailsHTML += `
+                            <div class="col-auto"><i class="bi bi-palette-fill me-1" style="color: var(--bs-success);"></i><strong style="color: var(--bs-emphasis-color);">Color:</strong></div>
+                            <div class="col" style="color: var(--bs-body-color);">${alertData.vehicle_color}</div>
+                        `;
+                    }
+                    vehicleDetailsHTML += '</div>';
+                }
+
+                let toastBodyHTML = `
+                    <div class="mb-2">
+                        <i class="bi bi-bookmark-star-fill me-1" style="color: var(--bs-warning);"></i>
+                        <strong style="color: var(--bs-emphasis-color);">Watchlist:</strong>
+                        <span style="color: var(--bs-primary); font-weight: 500;">${alertData.watchlist_name || 'N/A'}</span>
                     </div>
-                    <div class="row gx-2 mt-1">
-                        <div class="col-auto"><i class="bi bi-card-text text-info"></i> <strong>Reason:</strong></div>
-                        <div class="col"><em>${alertData.reason || 'N/A'}</em></div>
+                    <div class="mb-1">
+                        <i class="bi bi-info-circle-fill me-1" style="color: var(--bs-info);"></i>
+                        <strong style="color: var(--bs-emphasis-color);">Reason:</strong>
                     </div>
+                    <p class="text-muted fst-italic ps-3" style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--bs-secondary-color) !important;">${alertData.reason || 'N/A'}</p>
+                    ${vehicleDetailsHTML}
                 `;
 
                 if (alertData.detection_id) {
                     const detectionUrl = `${detectionIndexUrlBase}?search=${encodeURIComponent(alertData.plate_text || '')}#detection-${alertData.detection_id}`;
-                    toastBodyContent += `<div class="mt-3 text-center">
-                                            <a href="${detectionUrl}" class="btn btn-outline-light btn-sm w-75">
-                                                <i class="bi bi-search me-1"></i>View Full Detection Details
-                                            </a>
-                                         </div>`;
+                    toastBodyHTML += `<div class="d-grid mt-3">
+                                        <a href="${detectionUrl}" class="btn btn-primary btn-sm">
+                                            <i class="bi bi-arrow-right-circle-fill me-1"></i>View Full Detection Details
+                                        </a>
+                                     </div>`;
                 }
 
-                // Use a more attention-grabbing style for the toast itself
                 const toastHTML = `
-                    <div class="toast shadow-lg" role="alert" aria-live="assertive" aria-atomic="true" id="${toastId}" style="min-width: 350px;" data-bs-autohide="true" data-bs-delay="120000">
-                        <div class="toast-header bg-danger text-white border-bottom border-light">
-                            ${toastHeader}
+                    <div class="toast shadow-lg" role="alert" aria-live="assertive" aria-atomic="true" id="${toastId}" style="min-width: 380px;" data-bs-autohide="true" data-bs-delay="120000">
+                        <div class="toast-header bg-danger text-white">
+                            ${toastHeaderHTML}
                         </div>
-                        <div class="toast-body bg-dark text-light" style="font-size: 0.9rem;">
-                            ${toastBodyContent}
+                        <div class="toast-body" style="background-color: var(--bs-body-tertiary); color: var(--bs-body-color); padding: 1rem;">
+                            ${toastBodyHTML}
                         </div>
                     </div>
                 `;
-                // Toasts will now persist until manually closed.
-                // Header: bg-danger, text-white. Body: bg-dark, text-light for contrast.
 
                 toastPlacement.insertAdjacentHTML('beforeend', toastHTML);
                 const toastElement = document.getElementById(toastId);
