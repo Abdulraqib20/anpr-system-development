@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import sys
 from pathlib import Path
@@ -15,6 +18,26 @@ import traceback
 # Import ANPRProcessor - Use relative import
 # from .anpr_image import ANPRProcessor
 from .anpr_image import ANPRProcessor
+
+# Live camera processing
+import cv2
+import threading
+import time
+import base64
+from datetime import datetime
+from pathlib import Path
+
+# Global camera variables
+camera_cap = None
+camera_thread = None
+camera_running = False
+camera_stats = {
+    'start_time': None,
+    'frames_processed': 0,
+    'plates_detected': 0,
+    'last_detection_time': None,
+    'fps': 0
+}
 
 # --- Flask-Login Imports ---
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -74,7 +97,7 @@ LOG_FILE_PATH = LOGS_DIR / "web.log"
 # Get a specific logger instance for the web app
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ANPR_WebApp") # Specific name for this logger
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.INFO)  # Use INFO level for better performance
 
 # Remove existing handlers if any (important for repeated runs/debugging)
 if logger.hasHandlers():
@@ -155,7 +178,16 @@ csrf = CSRFProtect(app)
 # ---------------------------
 
 # --- Flask-SocketIO Setup ---
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*") # Allow all origins for now, tighten in production
+socketio = SocketIO(
+    app,
+    async_mode='eventlet',
+    cors_allowed_origins="*",
+    ping_timeout=30,
+    ping_interval=10,
+    logger=False,
+    engineio_logger=False,
+    transports=['polling', 'websocket']
+) # Simplified Socket.IO configuration for better stability
 # ----------------------------
 
 # --- Flask-Login Setup ---
@@ -618,47 +650,35 @@ def index():
                 if today_count_result:
                     stats['today_detections'] = today_count_result[0]
 
+                # --- NEW: Fetch Images for Gallery directly from DB ---
+                logger.info("Fetching gallery images from the database.")
+                gallery_query = """
+                    SELECT annotated_frame_filename, license_plate
+                    FROM detected_plates
+                    WHERE annotated_frame_filename IS NOT NULL
+                    ORDER BY end_time DESC
+                    LIMIT 20;
+                """
+                cur.execute(gallery_query)
+                gallery_results = cur.fetchall()
+                for row in gallery_results:
+                    plate_images.append({'filename': row[0], 'plate_text': row[1]})
+                logger.info(f"Found {len(plate_images)} images for gallery from database.")
+                # --- END NEW ---
+
         except psycopg2.Error as e:
-            logger.error(f"Database query error on index page (server-side part): {e}", exc_info=True)
-            error_message = f"Database Error: Could not retrieve initial data."
+            logger.error(f"Database query error on index page: {e}", exc_info=True)
+            error_message = f"Database Error: Could not retrieve page data."
+            # Set defaults on error
             stats = {'today_detections': 'Error'}
             total_detections = 'Error'
-            total_pages = 1
-            page = 1
     else:
-        error_message = "Database connection not available for initial data."
+        error_message = "Database connection not available."
         stats = {'today_detections': 'N/A'}
         total_detections = 'N/A'
-        total_pages = 1
-        page = 1
-
-    # --- Fetch Images for Gallery (This part is fine as is) ---
-    try:
-        logger.info(f"Scanning for annotated frame images in: {OUTPUT_DIR}")
-        image_files = []
-        if OUTPUT_DIR.is_dir():
-            for item in OUTPUT_DIR.iterdir():
-                if item.is_file() and item.suffix.lower() in ['.jpg', '.jpeg', '.png']:
-                    if not item.parent.name == PLATE_IMAGE_DIR.name:
-                        mtime = item.stat().st_mtime
-                        image_files.append((item, mtime))
-            image_files.sort(key=lambda x: x[1], reverse=True)
-            max_gallery_images = 100
-            image_files = image_files[:max_gallery_images]
-            for img_path, _ in image_files:
-                filename = img_path.name
-                plate_text = filename
-                plate_images.append({'filename': filename, 'plate_text': plate_text})
-            logger.info(f"Found {len(plate_images)} annotated images for the gallery (max: {max_gallery_images}).")
-        else:
-            logger.warning(f"Annotated image directory not found or is not a directory: {OUTPUT_DIR}")
-    except Exception as e:
-        logger.error(f"Error scanning annotated image directory: {e}", exc_info=True)
-        current_error = "Error loading image gallery."
-        error_message = f"{error_message} | {current_error}" if error_message else current_error
 
     # --- Render Template ---
-    raw_csrf_token = generate_csrf() # Generate the raw token value
+    raw_csrf_token = generate_csrf()
 
     logger.debug("Rendering index.html template...")
     try:
@@ -1555,28 +1575,271 @@ def admin_all_alerts():
     return render_template('admin/admin_all_alerts.html', title='All System Alerts',
                            alerts=all_alerts_data, csrf_form=csrf_form_alerts)
 
-# --- SocketIO Event Handlers ---
+# --- Live Camera Processing Functions ---
+def get_camera_stats():
+    """Get current camera statistics"""
+    stats = camera_stats.copy()
+    if stats['start_time']:
+        runtime = (datetime.now() - datetime.fromisoformat(stats['start_time'])).total_seconds()
+        stats['runtime_seconds'] = int(runtime)
+    else:
+        stats['runtime_seconds'] = 0
+    return stats
+
+def capture_and_process_frame():
+    """Capture a single frame and process it through ANPR"""
+    global camera_cap, anpr_processor
+
+    if not camera_cap or not camera_cap.isOpened():
+        return {'error': 'Camera not available'}
+
+    try:
+        # Capture frame
+        ret, frame = camera_cap.read()
+        if not ret:
+            return {'error': 'Failed to capture frame'}
+
+        logger.info("Frame captured, starting ANPR processing...")
+
+        # Process through existing ANPR system (same as image upload)
+        annotated_frame, detections = anpr_processor.process_image(frame)
+
+        # Generate filename for annotated frame
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        annotated_filename = f"live_capture_{timestamp}.jpg"
+
+        # Save annotated frame
+        output_dir = Path("output_plates")
+        output_dir.mkdir(exist_ok=True)
+        annotated_path = output_dir / annotated_filename
+
+        saved_filename = None
+        try:
+            success = cv2.imwrite(str(annotated_path), annotated_frame)
+            if success:
+                saved_filename = annotated_filename
+                logger.info(f"Saved capture frame: {annotated_filename}")
+            else:
+                logger.warning("Failed to save annotated frame")
+        except Exception as e:
+            logger.error(f"Error saving annotated frame: {e}")
+
+        # Save to database if detections found
+        if detections:
+            try:
+                anpr_processor.save_to_database(detections, annotated_frame_filename=saved_filename)
+                camera_stats['plates_detected'] += len(detections)
+                camera_stats['last_detection_time'] = datetime.now().isoformat()
+                logger.info(f"Saved {len(detections)} detections to database")
+            except Exception as e:
+                logger.error(f"Error saving detections to database: {e}")
+
+        # Return results
+        return {
+            'success': True,
+            'detections_count': len(detections) if detections else 0,
+            'detections': detections,
+            'annotated_image': saved_filename,
+            'timestamp': timestamp
+        }
+
+    except Exception as e:
+        logger.error(f"Error in capture and process: {e}")
+        return {'error': f'Processing failed: {str(e)}'}
+
+# --- Live Camera Routes ---
+@app.route('/live_camera')
+@login_required
+@admin_required  # Only admins can access live camera
+def live_camera():
+    """Live camera detection page"""
+    return render_template('live_camera.html')
+
+@app.route('/api/camera/start', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def start_camera():
+    """Start camera for live preview (no processing)"""
+    global camera_cap, camera_running, camera_stats
+
+    if camera_running:
+        return jsonify({'error': 'Camera is already running'}), 400
+
+    try:
+        data = request.get_json() or {}
+        camera_index = data.get('camera_index', 0)
+
+        logger.info(f"Attempting to start camera with index: {camera_index}")
+
+        # Initialize camera
+        camera_cap = cv2.VideoCapture(camera_index)
+
+        if not camera_cap.isOpened():
+            camera_cap = None
+            return jsonify({'error': f'Failed to open camera {camera_index}'}), 500
+
+        # Set camera properties for better performance
+        camera_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        camera_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        camera_cap.set(cv2.CAP_PROP_FPS, 15)
+
+        camera_running = True
+        camera_stats['start_time'] = datetime.now().isoformat()
+        camera_stats['frames_processed'] = 0
+        camera_stats['plates_detected'] = 0
+
+        logger.info(f"Camera {camera_index} started successfully for preview")
+
+        return jsonify({
+            'success': True,
+            'message': f'Camera {camera_index} started successfully',
+            'stats': get_camera_stats()
+        })
+
+    except Exception as e:
+        logger.error(f"Error starting camera: {e}")
+        return jsonify({'error': f'Failed to start camera: {str(e)}'}), 500
+
+@app.route('/api/camera/capture', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def capture_frame():
+    """Capture and process a single frame"""
+    global camera_running
+
+    if not camera_running:
+        return jsonify({'error': 'Camera is not running'}), 400
+
+    # Capture and process frame
+    result = capture_and_process_frame()
+
+    if 'error' in result:
+        return jsonify(result), 500
+
+    return jsonify(result)
+
+@app.route('/api/camera/preview')
+@login_required
+@admin_required
+@csrf.exempt
+def camera_preview():
+    """Get current camera preview frame"""
+    global camera_cap, camera_running
+
+    if not camera_running or not camera_cap:
+        return jsonify({'error': 'Camera not available'}), 400
+
+    try:
+        ret, frame = camera_cap.read()
+        if not ret:
+            return jsonify({'error': 'Failed to capture preview'}), 500
+
+        # Encode frame as JPEG
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        frame_data = base64.b64encode(buffer).decode('utf-8')
+
+        return jsonify({
+            'success': True,
+            'image': frame_data,
+            'timestamp': datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting preview: {e}")
+        return jsonify({'error': f'Preview failed: {str(e)}'}), 500
+
+@app.route('/api/camera/stop', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def stop_camera():
+    """Stop live camera"""
+    global camera_cap, camera_running, camera_thread, camera_stats
+
+    try:
+        if camera_running:
+            camera_running = False
+
+        if camera_cap:
+            camera_cap.release()
+            camera_cap = None
+
+        camera_stats['frames_processed'] = 0
+        camera_stats['start_time'] = None
+
+        logger.info("Camera stopped successfully")
+
+        return jsonify({
+            'success': True,
+            'message': 'Camera stopped successfully',
+            'stats': get_camera_stats()
+        })
+
+    except Exception as e:
+        logger.error(f"Error stopping camera: {e}")
+        return jsonify({'error': f'Failed to stop camera: {str(e)}'}), 500
+
+@app.route('/api/camera/status')
+@login_required
+@admin_required
+@csrf.exempt
+def camera_status():
+    """Get camera status"""
+    return jsonify({
+        'running': camera_running,
+        'stats': get_camera_stats()
+    })
+
+@app.route('/api/camera/available')
+@login_required
+@admin_required
+@csrf.exempt
+def available_cameras():
+    """Get list of available cameras"""
+    cameras = []
+
+    # Test cameras 0-2
+    for i in range(3):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            cameras.append({
+                'index': i,
+                'resolution': f"{int(width)}x{int(height)}"
+            })
+            cap.release()
+
+    return jsonify({'cameras': cameras})
+
 @socketio.on('connect')
 def handle_connect():
+    """Handle client connection"""
     if current_user.is_authenticated and current_user.is_admin():
         join_room('admins_room')
         logger.info(f"Admin user {current_user.username} (SID: {request.sid}) connected and joined 'admins_room'.")
     else:
-        # For non-admins or unauthenticated users, we can just log or do nothing.
-        # They won't be added to the 'admins_room' and thus won't receive admin-specific alerts.
-        logger.info(f"User (SID: {request.sid}, Authenticated: {current_user.is_authenticated}) connected but not added to admin room.")
+        logger.warning(f"Non-admin user attempted to connect via SocketIO: {current_user.username if current_user.is_authenticated else 'Anonymous'}")
 
 @socketio.on('disconnect')
 def handle_disconnect(*args, **kwargs):
-    # Leaving rooms on disconnect is often handled automatically by Flask-SocketIO,
-    # but explicit leave_room can be used if needed.
-    # We can log the disconnect.
-    if current_user.is_authenticated and current_user.is_admin():
-        # leave_room('admins_room') # Optional: Flask-SocketIO usually handles this.
+    """Handle client disconnection"""
+    if current_user.is_authenticated:
         logger.info(f"Admin user {current_user.username} (SID: {request.sid}) disconnected.")
-    else:
-        logger.info(f"User (SID: {request.sid}) disconnected.")
-# -----------------------------
+
+@socketio.on('join_camera_room')
+def handle_join_camera_room():
+    """Join camera streaming room"""
+    join_room('camera_stream')
+    logger.info(f"User {current_user.username} joined camera stream room")
+
+@socketio.on('leave_camera_room')
+def handle_leave_camera_room():
+    """Leave camera streaming room"""
+    leave_room('camera_stream')
+    logger.info(f"User {current_user.username} left camera stream room")
 
 # --- Main Execution ---
 if __name__ == '__main__':
@@ -1585,4 +1848,7 @@ if __name__ == '__main__':
     # Set use_reloader=False to prevent restarts during ANPR processing
     logger.info("Starting Flask development server with SocketIO (reloader disabled).")
     # For 'production', set debug=False and use a production WSGI server like waitress
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    socketio.run(app, host='127.0.0.1', port=8080, debug=True, use_reloader=False)
+    # socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+
+    # python -m src.web_app

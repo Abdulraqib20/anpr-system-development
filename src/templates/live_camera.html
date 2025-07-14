@@ -1,0 +1,516 @@
+{% extends 'base.html' %}
+
+{% block title %}Live Camera Detection{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <h2 class="mb-4">
+                <i class="fas fa-camera"></i> Live Camera Detection
+            </h2>
+        </div>
+    </div>
+
+    <!-- Camera Controls -->
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Camera Controls</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <label for="cameraSelect" class="form-label">Select Camera:</label>
+                            <select id="cameraSelect" class="form-select">
+                                <option value="0">Camera 0 (Default)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 d-flex align-items-end">
+                            <button id="startBtn" class="btn btn-success me-2">
+                                <i class="fas fa-play"></i> Start Preview
+                            </button>
+                            <button id="stopBtn" class="btn btn-danger me-2" disabled>
+                                <i class="fas fa-stop"></i> Stop
+                            </button>
+                            <button id="refreshCamerasBtn" class="btn btn-secondary">
+                                <i class="fas fa-sync"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Panel -->
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Status & Statistics</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p><strong>Status:</strong> <span id="statusIndicator" class="badge bg-secondary">Stopped</span></p>
+                            <p><strong>Captures Processed:</strong> <span id="capturesProcessed">0</span></p>
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>Plates Detected:</strong> <span id="platesDetected">0</span></p>
+                            <p><strong>Runtime:</strong> <span id="runtime">0s</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Camera Preview and Capture -->
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5>Live Preview</h5>
+                    <div>
+                        <button id="captureBtn" class="btn btn-primary me-2" disabled>
+                            <i class="fas fa-camera"></i> Capture & Analyze
+                        </button>
+                        <button id="fullscreenBtn" class="btn btn-sm btn-outline-secondary">
+                            <i class="fas fa-expand"></i> Fullscreen
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body text-center">
+                    <div id="videoContainer" style="position: relative; max-width: 100%; background: #000;">
+                        <img id="cameraPreview"
+                             src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkNhbWVyYSBQcmV2aWV3IChDbGljayBTdGFydCk8L3RleHQ+PC9zdmc+"
+                             alt="Camera Preview"
+                             class="img-fluid rounded"
+                             style="max-width: 100%; height: auto; min-height: 300px;">
+                    </div>
+
+                    <!-- Capture Instructions -->
+                    <div class="mt-3">
+                        <small class="text-muted">
+                            <i class="fas fa-info-circle"></i>
+                            Start the camera preview, then click "Capture & Analyze" to detect license plates in the current frame.
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Detection Results</h5>
+                </div>
+                <div class="card-body">
+                    <div id="detectionResults">
+                        <div class="text-muted text-center p-3">
+                            <i class="fas fa-search"></i>
+                            Capture an image to see detection results
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h5>Quick Actions</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
+                            <i class="fas fa-list"></i> View All Detections
+                        </a>
+                        <a href="{{ url_for('admin_watchlists') }}" class="btn btn-outline-warning">
+                            <i class="fas fa-shield-alt"></i> Manage Watchlists
+                        </a>
+                        <a href="{{ url_for('admin_all_alerts') }}" class="btn btn-outline-danger">
+                            <i class="fas fa-exclamation-triangle"></i> View Alerts
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Success Modal -->
+<div class="modal fade" id="successModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title">Detection Complete</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="successMessage"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a href="{{ url_for('index') }}" class="btn btn-primary">View All Detections</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.detection-result {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: #f8f9fa;
+}
+
+.detection-plate {
+    font-weight: bold;
+    color: #333;
+    font-size: 1.1em;
+}
+
+.detection-confidence {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.detection-time {
+    color: #888;
+    font-size: 0.8em;
+}
+
+.status-running {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
+</style>
+
+<script>
+let isConnected = false;
+let isRunning = false;
+let previewInterval;
+let capturesProcessed = 0;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Load available cameras
+    loadAvailableCameras();
+
+    // Event listeners
+    document.getElementById('startBtn').addEventListener('click', startCamera);
+    document.getElementById('stopBtn').addEventListener('click', stopCamera);
+    document.getElementById('captureBtn').addEventListener('click', captureAndProcess);
+    document.getElementById('refreshCamerasBtn').addEventListener('click', loadAvailableCameras);
+    document.getElementById('fullscreenBtn').addEventListener('click', toggleFullscreen);
+
+    // Check initial camera status
+    checkCameraStatus();
+});
+
+function loadAvailableCameras() {
+    console.log('Loading available cameras...');
+    fetch('/api/camera/available')
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById('cameraSelect');
+            select.innerHTML = '';
+
+            if (data.cameras && data.cameras.length > 0) {
+                data.cameras.forEach(camera => {
+                    const option = document.createElement('option');
+                    option.value = camera.index;
+                    option.textContent = `Camera ${camera.index} (${camera.resolution})`;
+                    select.appendChild(option);
+                });
+                console.log(`Found ${data.cameras.length} cameras`);
+            } else {
+                const option = document.createElement('option');
+                option.textContent = 'No cameras detected';
+                option.disabled = true;
+                select.appendChild(option);
+                console.log('No cameras found');
+            }
+        })
+        .catch(error => {
+            console.error('Error loading cameras:', error);
+            showAlert('Error loading available cameras', 'danger');
+        });
+}
+
+function startCamera() {
+    const cameraIndex = parseInt(document.getElementById('cameraSelect').value);
+    console.log(`Starting camera ${cameraIndex}...`);
+
+    fetch('/api/camera/start', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ camera_index: cameraIndex })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            showAlert(data.error, 'danger');
+        } else {
+            isRunning = true;
+            updateUI();
+            startPreview();
+            console.log('Camera started successfully');
+            showAlert('Camera started successfully', 'success');
+        }
+    })
+    .catch(error => {
+        console.error('Error starting camera:', error);
+        showAlert('Failed to start camera', 'danger');
+    });
+}
+
+function stopCamera() {
+    console.log('Stopping camera...');
+
+    fetch('/api/camera/stop', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        isRunning = false;
+        stopPreview();
+        updateUI();
+        console.log('Camera stopped successfully');
+        showAlert('Camera stopped', 'info');
+    })
+    .catch(error => {
+        console.error('Error stopping camera:', error);
+        showAlert('Failed to stop camera', 'danger');
+    });
+}
+
+function startPreview() {
+    if (previewInterval) {
+        clearInterval(previewInterval);
+    }
+
+    console.log('Starting preview refresh...');
+    updatePreview(); // Get first frame immediately
+
+    // Refresh preview every 200ms for smooth viewing
+    previewInterval = setInterval(updatePreview, 200);
+}
+
+function stopPreview() {
+    if (previewInterval) {
+        clearInterval(previewInterval);
+        previewInterval = null;
+        console.log('Preview stopped');
+    }
+}
+
+function updatePreview() {
+    if (!isRunning) {
+        return;
+    }
+
+    fetch('/api/camera/preview')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.image) {
+                const img = document.getElementById('cameraPreview');
+                img.src = 'data:image/jpeg;base64,' + data.image;
+            }
+        })
+        .catch(error => {
+            console.error('Preview update failed:', error);
+        });
+}
+
+function captureAndProcess() {
+    if (!isRunning) {
+        showAlert('Camera is not running', 'warning');
+        return;
+    }
+
+    console.log('Capturing and processing frame...');
+
+    // Temporarily disable the capture button to prevent multiple clicks
+    const captureBtn = document.getElementById('captureBtn');
+    captureBtn.disabled = true;
+
+    fetch('/api/camera/capture', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        // Re-enable capture button
+        captureBtn.disabled = false;
+
+        if (data.error) {
+            showAlert(data.error, 'danger');
+        } else {
+            capturesProcessed++;
+            updateStats(data.stats || {});
+            displayDetectionResults(data);
+
+            if (data.detections_count > 0) {
+                showAlert(`SUCCESS! Found ${data.detections_count} VALID license plate(s) - saved to database!`, 'success');
+            } else if (data.total_detections_found > 0) {
+                showAlert(`Image processed - found ${data.total_detections_found} detections but none were valid license plates`, 'warning');
+            } else {
+                showAlert('Image captured and processed - no license plates detected', 'info');
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Capture failed:', error);
+        // Re-enable capture button
+        captureBtn.disabled = false;
+        showAlert('Failed to capture and process image', 'danger');
+    });
+}
+
+function displayDetectionResults(data) {
+    const resultsContainer = document.getElementById('detectionResults');
+
+    if (data.detections_count === 0) {
+        let message = "No valid license plates detected in this capture";
+        let iconClass = "fas fa-search text-muted";
+        let statusClass = "text-muted";
+
+        if (data.total_detections_found > 0) {
+            message = `Found ${data.total_detections_found} potential plates, but none were valid enough to save`;
+            iconClass = "fas fa-exclamation-triangle text-warning";
+            statusClass = "text-warning";
+        }
+
+        resultsContainer.innerHTML = `
+            <div class="text-center p-3">
+                <i class="${iconClass}"></i>
+                <p class="${statusClass} mb-0">${message}</p>
+                <small class="text-muted">Processed at ${new Date(data.timestamp).toLocaleTimeString()}</small>
+            </div>
+        `;
+        return;
+    }
+
+    let html = `<h6 class="text-success mb-3"><i class="fas fa-check-circle"></i> Found ${data.detections_count} VALID plate(s)!</h6>`;
+
+    if (data.detections) {
+        data.detections.forEach(detection => {
+            html += `
+                <div class="detection-result">
+                    <div class="detection-plate">${detection.license_plate}</div>
+                    <div class="detection-confidence">Confidence: ${(detection.confidence * 100).toFixed(1)}%</div>
+                    <div class="detection-time">Captured: ${new Date().toLocaleTimeString()}</div>
+                </div>
+            `;
+        });
+    }
+
+    if (data.total_detections_found > data.detections_count) {
+        html += `
+            <div class="mt-2 p-2 bg-light rounded">
+                <small class="text-info">
+                    <i class="fas fa-info-circle"></i>
+                    Found ${data.total_detections_found} total detections, but only ${data.detections_count} met quality standards for saving
+                </small>
+            </div>
+        `;
+    }
+
+    html += `
+        <div class="mt-3">
+            <small class="text-success">
+                <i class="fas fa-database"></i>
+                Valid results saved to database and available in <a href="${'/'}">All Detections</a>
+            </small>
+        </div>
+    `;
+
+    resultsContainer.innerHTML = html;
+}
+
+function checkCameraStatus() {
+    fetch('/api/camera/status')
+        .then(response => response.json())
+        .then(data => {
+            isRunning = data.running;
+            updateUI();
+            updateStats(data.stats);
+
+            if (isRunning) {
+                startPreview();
+            }
+        })
+        .catch(error => {
+            console.error('Error checking camera status:', error);
+        });
+}
+
+function updateUI() {
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const statusIndicator = document.getElementById('statusIndicator');
+
+    if (isRunning) {
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        captureBtn.disabled = false;
+        statusIndicator.innerHTML = '<span class="badge bg-success status-running">Running</span>';
+    } else {
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        captureBtn.disabled = true;
+        statusIndicator.innerHTML = '<span class="badge bg-secondary">Stopped</span>';
+    }
+}
+
+function updateStats(stats) {
+    if (stats) {
+        document.getElementById('capturesProcessed').textContent = capturesProcessed;
+        document.getElementById('platesDetected').textContent = stats.plates_detected || 0;
+        document.getElementById('runtime').textContent = `${stats.runtime_seconds || 0}s`;
+    }
+}
+
+function toggleFullscreen() {
+    const videoContainer = document.getElementById('videoContainer');
+
+    if (!document.fullscreenElement) {
+        videoContainer.requestFullscreen().catch(err => {
+            console.error('Error attempting to enable fullscreen:', err);
+        });
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+function showAlert(message, type) {
+    // Create alert element
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+    alert.style.cssText = 'top: 20px; right: 20px; z-index: 1050; max-width: 300px;';
+    alert.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+
+    document.body.appendChild(alert);
+
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+        if (alert.parentNode) {
+            alert.parentNode.removeChild(alert);
+        }
+    }, 5000);
+}
+</script>
+{% endblock %}

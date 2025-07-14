@@ -282,6 +282,7 @@
                                 {% if current_user.is_admin() %}
                                 <li><a class="dropdown-item" href="{{ url_for('admin_dashboard') }}"><i class="bi bi-person-gear me-2"></i>Admin Panel</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('admin_watchlists') }}"><i class="bi bi-list-task me-2"></i>Watchlists</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('live_camera') }}"><i class="bi bi-camera-video-fill me-2"></i>Live Camera</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('admin_detection_analytics') }}"><i class="bi bi-bar-chart-line-fill me-2"></i>Detection Analytics</a></li>
                                 <li><a class="dropdown-item" href="{{ url_for('admin_usage_metrics') }}"><i class="bi bi-graph-up-arrow me-2"></i>API Usage</a></li>
                                 <li><hr class="dropdown-divider"></li>
@@ -736,9 +737,9 @@
                 console.log("Admin user detected, attempting Socket.IO connection...");
                 try {
                     const socket = io({
-                        transports: ['websocket', 'polling'], // Explicitly define transports
-                        // path: '/socket.io', // Default path, usually not needed unless server config is different
-                        // autoConnect: true // Default is true
+                        transports: ['polling', 'websocket'], // Use polling first for reliability
+                        reconnection: true,
+                        reconnectionAttempts: 3 // Attempt to reconnect a few times if disconnected
                     });
 
                     socket.on('connect', function() {
@@ -746,22 +747,14 @@
                     });
 
                     socket.on('connect_error', (err) => {
-                        console.error('Socket.IO connection error:', err.message, err.description, err.data);
-                        // You could show a persistent, non-intrusive UI warning that real-time alerts are down.
-                        // Example: document.getElementById('socket-status-warning').style.display = 'block';
+                        console.warn(`Socket.IO connection failed: ${err.message}. Real-time alerts will be unavailable.`);
                     });
 
                     socket.on('disconnect', function(reason) {
-                        console.log('Socket.IO disconnected. Reason:', reason);
-                        if (reason === 'io server disconnect') {
-                            // The server deliberately disconnected the socket.
-                            socket.connect(); // Attempt to reconnect if appropriate for your app
-                        }
-                        // Else, the disconnection was initiated by the client or due to network issues.
+                        console.log(`Socket.IO disconnected. Reason: ${reason}`);
                     });
 
                     socket.on('new_alert', function(alertData) {
-                        console.log('New alert received via Socket.IO:', alertData);
                         if (alertData && typeof alertData === 'object') {
                             showToastNotification(alertData);
                         } else {
@@ -769,14 +762,8 @@
                         }
                     });
 
-                    // Optional: A way to test the connection or if the user is in the room
-                    // socket.emit('test_admin_room', { message: 'Hello from admin client!' });
-                    // socket.on('test_admin_room_ack', function(data) {
-                    //    console.log('Admin room test acknowledged by server:', data);
-                    // });
-
                 } catch (e) {
-                    console.error("Error setting up Socket.IO client:", e);
+                    console.warn("Could not initialize Socket.IO client. Real-time alerts will be unavailable.", e);
                 }
             } else {
                 console.log("Not an admin user, Socket.IO for alerts not initialized.");
