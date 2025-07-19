@@ -63,3 +63,7 @@ uploads/
 # backups
 src/training_bme.ipynb
 src/templates/admin/admin_usage_metrics copy.html
+
+# others
+.cursor/
+.kiro/

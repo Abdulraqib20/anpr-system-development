@@ -21,6 +21,7 @@ from .anpr_image import ANPRProcessor
 
 # Live camera processing
 import cv2
+from ultralytics import YOLO
 import threading
 import time
 import base64
@@ -38,6 +39,199 @@ camera_stats = {
     'last_detection_time': None,
     'fps': 0
 }
+
+# Global auto-detection variables
+auto_detection_running = False
+auto_detection_thread = None
+auto_detection_stats = {
+    'start_time': None,
+    'vehicles_detected': 0,
+    'plates_processed': 0,
+    'last_vehicle_time': None,
+    'detection_cooldown': 10,  # seconds between vehicle detections
+    'vehicle_confidence_threshold': 0.7,
+    'last_processed_vehicles': {},  # track recent vehicle detections to avoid duplicates
+}
+
+class AutoDetectionManager:
+    """Manages automatic vehicle detection and ANPR processing"""
+
+    def __init__(self, anpr_processor, socketio_instance):
+        self.anpr_processor = anpr_processor
+        self.socketio = socketio_instance
+        self.vehicle_model = YOLO("models/yolov8n.pt")  # Lighter model for real-time detection
+        self.running = False
+        self.detection_cooldown = 10  # seconds between detections
+        self.vehicle_confidence = 0.7
+        self.last_detection_time = 0
+        self.processed_vehicles = {}  # hash -> timestamp mapping
+
+    def detect_vehicles_in_frame(self, frame):
+        """Detect vehicles in frame using YOLOv8"""
+        try:
+            # Vehicle classes from COCO dataset that we're interested in
+            vehicle_classes = [2, 3, 5, 7]  # car, motorcycle, bus, truck
+
+            results = self.vehicle_model.predict(frame, conf=self.vehicle_confidence, verbose=False)
+            vehicles = []
+
+            for result in results:
+                boxes = result.boxes.xyxy.cpu().numpy()
+                classes = result.boxes.cls.cpu().numpy()
+                confs = result.boxes.conf.cpu().numpy()
+
+                for box, cls, conf in zip(boxes, classes, confs):
+                    cls_id = int(cls)
+                    if cls_id in vehicle_classes:
+                        x1, y1, x2, y2 = map(int, box)
+                        vehicles.append({
+                            'box': (x1, y1, x2, y2),
+                            'confidence': float(conf),
+                            'class': cls_id,
+                            'area': (x2 - x1) * (y2 - y1)
+                        })
+
+            return vehicles
+
+        except Exception as e:
+            logger.error(f"Error detecting vehicles: {e}")
+            return []
+
+    def should_process_vehicle(self, vehicle):
+        """Check if vehicle should be processed based on cooldown and uniqueness"""
+        current_time = time.time()
+
+        # Check global cooldown
+        if current_time - self.last_detection_time < self.detection_cooldown:
+            return False
+
+        # Create a simple hash for vehicle position/size to avoid duplicate processing
+        x1, y1, x2, y2 = vehicle['box']
+        vehicle_hash = f"{x1//10}_{y1//10}_{x2//10}_{y2//10}"  # Reduce precision for grouping
+
+        # Check if we've processed a similar vehicle recently
+        if vehicle_hash in self.processed_vehicles:
+            last_time = self.processed_vehicles[vehicle_hash]
+            if current_time - last_time < self.detection_cooldown * 2:  # Longer cooldown for similar vehicles
+                return False
+
+        # Update tracking
+        self.processed_vehicles[vehicle_hash] = current_time
+        self.last_detection_time = current_time
+
+        # Clean old entries
+        self.processed_vehicles = {
+            k: v for k, v in self.processed_vehicles.items()
+            if current_time - v < self.detection_cooldown * 5
+        }
+
+        return True
+
+    def process_detected_vehicle(self, frame, vehicle):
+        """Process frame through ANPR pipeline when vehicle is detected"""
+        try:
+            logger.info(f"Auto-processing vehicle detection with confidence {vehicle['confidence']:.2f}")
+
+            # Emit real-time update to connected clients
+            if self.socketio:
+                self.socketio.emit('vehicle_detected', {
+                    'confidence': vehicle['confidence'],
+                    'timestamp': datetime.now().isoformat(),
+                    'box': vehicle['box'],
+                    'class': vehicle['class']
+                }, room='admins_room')
+
+            # Process through existing ANPR system
+            annotated_frame, detections = self.anpr_processor.process_image(frame)
+
+            # Generate filename for annotated frame
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            annotated_filename = f"auto_capture_{timestamp}.jpg"
+
+            # Save annotated frame
+            output_dir = Path("output_plates")
+            output_dir.mkdir(exist_ok=True)
+            annotated_path = output_dir / annotated_filename
+
+            saved_filename = None
+            try:
+                success = cv2.imwrite(str(annotated_path), annotated_frame)
+                if success:
+                    saved_filename = annotated_filename
+                    logger.info(f"Saved auto-detected frame: {annotated_filename}")
+            except Exception as e:
+                logger.error(f"Error saving auto-detected frame: {e}")
+
+            # Save to database if detections found
+            detection_results = {
+                'success': True,
+                'detections_count': len(detections) if detections else 0,
+                'detections': detections,
+                'annotated_image': saved_filename,
+                'timestamp': timestamp,
+                'auto_detected': True
+            }
+
+            if detections:
+                try:
+                    self.anpr_processor.save_to_database(detections, annotated_frame_filename=saved_filename)
+                    auto_detection_stats['plates_processed'] += len(detections)
+                    logger.info(f"Auto-detection: Saved {len(detections)} detections to database")
+
+                    # Emit successful detection to clients
+                    if self.socketio:
+                        self.socketio.emit('anpr_detection', detection_results, room='admins_room')
+
+                except Exception as e:
+                    logger.error(f"Error saving auto-detections to database: {e}")
+
+            # Update stats
+            auto_detection_stats['vehicles_detected'] += 1
+            auto_detection_stats['last_vehicle_time'] = datetime.now().isoformat()
+
+            return detection_results
+
+        except Exception as e:
+            logger.error(f"Error processing detected vehicle: {e}")
+            return {'error': f'Auto-processing failed: {str(e)}'}
+
+    def auto_detection_loop(self, camera_cap):
+        """Main auto-detection loop that runs in background thread"""
+        global auto_detection_running
+
+        logger.info("Starting auto vehicle detection loop")
+
+        while auto_detection_running and camera_cap:
+            try:
+                if not camera_cap.isOpened():
+                    time.sleep(0.1)
+                    continue
+
+                # Capture frame
+                ret, frame = camera_cap.read()
+                if not ret:
+                    time.sleep(0.1)
+                    continue
+
+                # Detect vehicles
+                vehicles = self.detect_vehicles_in_frame(frame)
+
+                # Process largest vehicle if any detected
+                if vehicles:
+                    # Sort by area to get largest vehicle
+                    largest_vehicle = max(vehicles, key=lambda v: v['area'])
+
+                    if self.should_process_vehicle(largest_vehicle):
+                        self.process_detected_vehicle(frame, largest_vehicle)
+
+                # Small delay to prevent overwhelming the system
+                time.sleep(0.5)  # Check every 500ms
+
+            except Exception as e:
+                logger.error(f"Error in auto-detection loop: {e}")
+                time.sleep(1)  # Longer delay on error
+
+        logger.info("Auto vehicle detection loop stopped")
 
 # --- Flask-Login Imports ---
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -299,10 +493,15 @@ def close_db(error):
 
 # --- Initialize ANPR Processor ---
 anpr_processor = None
+auto_detection_manager = None
 try:
     # Instantiate it once when the app starts, passing the socketio instance
     anpr_processor = ANPRProcessor(socketio_instance=socketio)
     logger.info("ANPRProcessor initialized successfully with SocketIO instance.")
+
+    # Initialize auto-detection manager
+    auto_detection_manager = AutoDetectionManager(anpr_processor, socketio)
+    logger.info("Auto-detection manager initialized successfully.")
 except Exception as e:
     logger.error(f"CRITICAL: Failed to initialize ANPRProcessor: {e}", exc_info=True)
     # The app might still run but uploads will fail. Consider if app should exit.
@@ -1756,9 +1955,17 @@ def camera_preview():
 @csrf.exempt
 def stop_camera():
     """Stop live camera"""
-    global camera_cap, camera_running, camera_thread, camera_stats
+    global camera_cap, camera_running, camera_thread, camera_stats, auto_detection_running, auto_detection_thread
 
     try:
+        # Stop auto-detection first if running
+        if auto_detection_running:
+            auto_detection_running = False
+            if auto_detection_thread and auto_detection_thread.is_alive():
+                auto_detection_thread.join(timeout=2)
+                auto_detection_thread = None
+            logger.info("Auto-detection stopped as part of camera shutdown")
+
         if camera_running:
             camera_running = False
 
@@ -1813,6 +2020,202 @@ def available_cameras():
             cap.release()
 
     return jsonify({'cameras': cameras})
+
+# --- Auto-Detection API Routes ---
+@app.route('/api/auto-detection/start', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def start_auto_detection():
+    """Start automatic vehicle detection"""
+    global auto_detection_running, auto_detection_thread, auto_detection_manager, camera_cap, camera_running
+
+    if not camera_running or not camera_cap:
+        return jsonify({'error': 'Camera must be running before starting auto-detection'}), 400
+
+    if auto_detection_running:
+        return jsonify({'error': 'Auto-detection is already running'}), 400
+
+    if not auto_detection_manager:
+        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+
+    try:
+        data = request.get_json() or {}
+
+        # Update settings if provided
+        if 'detection_cooldown' in data:
+            auto_detection_manager.detection_cooldown = max(5, int(data['detection_cooldown']))
+            auto_detection_stats['detection_cooldown'] = auto_detection_manager.detection_cooldown
+
+        if 'vehicle_confidence' in data:
+            auto_detection_manager.vehicle_confidence = max(0.5, min(1.0, float(data['vehicle_confidence'])))
+            auto_detection_stats['vehicle_confidence_threshold'] = auto_detection_manager.vehicle_confidence
+
+        auto_detection_running = True
+        auto_detection_stats['start_time'] = datetime.now().isoformat()
+        auto_detection_stats['vehicles_detected'] = 0
+        auto_detection_stats['plates_processed'] = 0
+
+        # Start auto-detection thread
+        auto_detection_thread = threading.Thread(
+            target=auto_detection_manager.auto_detection_loop,
+            args=(camera_cap,),
+            daemon=True
+        )
+        auto_detection_thread.start()
+
+        logger.info("Auto vehicle detection started successfully")
+
+        return jsonify({
+            'success': True,
+            'message': 'Auto vehicle detection started',
+            'settings': {
+                'detection_cooldown': auto_detection_manager.detection_cooldown,
+                'vehicle_confidence': auto_detection_manager.vehicle_confidence
+            },
+            'stats': auto_detection_stats
+        })
+
+    except Exception as e:
+        logger.error(f"Error starting auto-detection: {e}")
+        return jsonify({'error': f'Failed to start auto-detection: {str(e)}'}), 500
+
+@app.route('/api/auto-detection/stop', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def stop_auto_detection():
+    """Stop automatic vehicle detection"""
+    global auto_detection_running, auto_detection_thread
+
+    try:
+        auto_detection_running = False
+
+        if auto_detection_thread and auto_detection_thread.is_alive():
+            auto_detection_thread.join(timeout=2)  # Wait up to 2 seconds
+            auto_detection_thread = None
+
+        logger.info("Auto vehicle detection stopped successfully")
+
+        return jsonify({
+            'success': True,
+            'message': 'Auto vehicle detection stopped',
+            'stats': auto_detection_stats
+        })
+
+    except Exception as e:
+        logger.error(f"Error stopping auto-detection: {e}")
+        return jsonify({'error': f'Failed to stop auto-detection: {str(e)}'}), 500
+
+@app.route('/api/auto-detection/status')
+@login_required
+@admin_required
+@csrf.exempt
+def auto_detection_status():
+    """Get auto-detection status"""
+    return jsonify({
+        'running': auto_detection_running,
+        'stats': auto_detection_stats,
+        'settings': {
+            'detection_cooldown': auto_detection_manager.detection_cooldown if auto_detection_manager else 10,
+            'vehicle_confidence': auto_detection_manager.vehicle_confidence if auto_detection_manager else 0.7
+        }
+    })
+
+@app.route('/api/auto-detection/settings', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def update_auto_detection_settings():
+    """Update auto-detection settings"""
+    global auto_detection_manager
+
+    if not auto_detection_manager:
+        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+
+    try:
+        data = request.get_json() or {}
+
+        updated = {}
+
+        if 'detection_cooldown' in data:
+            cooldown = max(5, int(data['detection_cooldown']))
+            auto_detection_manager.detection_cooldown = cooldown
+            auto_detection_stats['detection_cooldown'] = cooldown
+            updated['detection_cooldown'] = cooldown
+
+        if 'vehicle_confidence' in data:
+            confidence = max(0.5, min(1.0, float(data['vehicle_confidence'])))
+            auto_detection_manager.vehicle_confidence = confidence
+            auto_detection_stats['vehicle_confidence_threshold'] = confidence
+            updated['vehicle_confidence'] = confidence
+
+        logger.info(f"Auto-detection settings updated: {updated}")
+
+        return jsonify({
+            'success': True,
+            'message': 'Settings updated successfully',
+            'updated': updated,
+            'current_settings': {
+                'detection_cooldown': auto_detection_manager.detection_cooldown,
+                'vehicle_confidence': auto_detection_manager.vehicle_confidence
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error updating auto-detection settings: {e}")
+        return jsonify({'error': f'Failed to update settings: {str(e)}'}), 500
+
+@app.route('/api/auto-detection/test', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def test_auto_detection():
+    """Test auto-detection with a static image (for development/testing)"""
+    if not auto_detection_manager:
+        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+
+    try:
+        # For testing, use a sample image from Resources folder
+        test_image_path = PROJECT_ROOT / "Resources" / "car3.png"
+
+        if not test_image_path.exists():
+            return jsonify({'error': 'Test image not found'}), 404
+
+        # Load test image
+        test_frame = cv2.imread(str(test_image_path))
+        if test_frame is None:
+            return jsonify({'error': 'Could not load test image'}), 400
+
+        # Detect vehicles in test frame
+        vehicles = auto_detection_manager.detect_vehicles_in_frame(test_frame)
+
+        result = {
+            'vehicles_found': len(vehicles),
+            'vehicles': vehicles,
+            'test_image': test_image_path.name
+        }
+
+        # If vehicles found, process one
+        if vehicles:
+            largest_vehicle = max(vehicles, key=lambda v: v['area'])
+            # Temporarily disable cooldown for testing
+            original_cooldown = auto_detection_manager.detection_cooldown
+            auto_detection_manager.detection_cooldown = 0
+
+            try:
+                detection_result = auto_detection_manager.process_detected_vehicle(test_frame, largest_vehicle)
+                result['anpr_result'] = detection_result
+            finally:
+                # Restore original cooldown
+                auto_detection_manager.detection_cooldown = original_cooldown
+
+        logger.info(f"Auto-detection test completed: {result}")
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error in auto-detection test: {e}")
+        return jsonify({'error': f'Test failed: {str(e)}'}), 500
 
 @socketio.on('connect')
 def handle_connect():

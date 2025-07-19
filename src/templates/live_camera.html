@@ -52,12 +52,89 @@
                 <div class="card-body">
                     <div class="row">
                         <div class="col-md-6">
-                            <p><strong>Status:</strong> <span id="statusIndicator" class="badge bg-secondary">Stopped</span></p>
-                            <p><strong>Captures Processed:</strong> <span id="capturesProcessed">0</span></p>
+                            <p><strong>Camera:</strong> <span id="statusIndicator" class="badge bg-secondary">Stopped</span></p>
+                            <p><strong>Manual Captures:</strong> <span id="capturesProcessed">0</span></p>
+                            <p><strong>Auto-Detection:</strong> <span id="autoDetectionStatus" class="badge bg-secondary">Stopped</span></p>
                         </div>
                         <div class="col-md-6">
                             <p><strong>Plates Detected:</strong> <span id="platesDetected">0</span></p>
+                            <p><strong>Vehicles Auto-Detected:</strong> <span id="vehiclesDetected">0</span></p>
                             <p><strong>Runtime:</strong> <span id="runtime">0s</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto-Detection Controls -->
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card border-primary">
+                <div class="card-header bg-primary text-white">
+                    <h5><i class="fas fa-robot"></i> Automatic Vehicle Detection</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="form-group mb-3">
+                                <label class="form-label">Auto-Detection Mode:</label>
+                                <div class="d-flex gap-2 mb-2">
+                                    <button id="startAutoBtn" class="btn btn-success" disabled>
+                                        <i class="fas fa-play"></i> Start Auto-Detection
+                                    </button>
+                                    <button id="stopAutoBtn" class="btn btn-danger" disabled>
+                                        <i class="fas fa-stop"></i> Stop Auto-Detection
+                                    </button>
+                                </div>
+                                <div class="d-flex gap-2">
+                                    <button id="testAutoBtn" class="btn btn-outline-secondary btn-sm">
+                                        <i class="fas fa-vial"></i> Test System
+                                    </button>
+                                </div>
+                                <small class="text-muted">Automatically processes frames when vehicles are detected</small>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group mb-3">
+                                <label for="detectionCooldown" class="form-label">Detection Cooldown (seconds):</label>
+                                <input type="range" class="form-range" id="detectionCooldown" min="5" max="30" value="10">
+                                <div class="d-flex justify-content-between">
+                                    <small>5s</small>
+                                    <span id="cooldownValue">10s</span>
+                                    <small>30s</small>
+                                </div>
+                                <small class="text-muted">Time between automatic detections</small>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group mb-3">
+                                <label for="vehicleConfidence" class="form-label">Vehicle Detection Confidence:</label>
+                                <input type="range" class="form-range" id="vehicleConfidence" min="50" max="95" value="70">
+                                <div class="d-flex justify-content-between">
+                                    <small>50%</small>
+                                    <span id="confidenceValue">70%</span>
+                                    <small>95%</small>
+                                </div>
+                                <small class="text-muted">Minimum confidence for vehicle detection</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-12">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i>
+                                <strong>How it works:</strong> When auto-detection is enabled, the system continuously monitors the camera feed.
+                                When a vehicle is detected with sufficient confidence, it automatically captures and processes the frame through
+                                the complete ANPR pipeline (license plate detection, OCR, vehicle color detection, etc.) and saves results to the database.
+                            </div>
+                            <div id="autoDetectionActivity" class="alert alert-success" style="display: none;">
+                                <i class="fas fa-eye"></i>
+                                <strong>Monitoring:</strong> <span id="monitoringStatus">Scanning for vehicles...</span>
+                                <div class="spinner-border spinner-border-sm ms-2" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -93,7 +170,7 @@
                     <div class="mt-3">
                         <small class="text-muted">
                             <i class="fas fa-info-circle"></i>
-                            Start the camera preview, then click "Capture & Analyze" to detect license plates in the current frame.
+                            
                         </small>
                     </div>
                 </div>
@@ -197,10 +274,38 @@
 <script>
 let isConnected = false;
 let isRunning = false;
+let autoDetectionRunning = false;
 let previewInterval;
 let capturesProcessed = 0;
+let socket;
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Initialize SocketIO for real-time updates
+    socket = io();
+
+    socket.on('connect', function() {
+        console.log('Connected to server');
+        socket.emit('join_camera_room');
+    });
+
+    socket.on('vehicle_detected', function(data) {
+        const confidencePercent = (data.confidence * 100).toFixed(1);
+        showAlert(`🚗 Vehicle detected (${confidencePercent}%) - Processing through ANPR pipeline...`, 'info');
+        updateVehicleDetectionIndicator();
+        updateMonitoringStatus(`Processing vehicle (${confidencePercent}% confidence)...`);
+    });
+
+    socket.on('anpr_detection', function(data) {
+        if (data.detections_count > 0) {
+            showAlert(`✅ Auto-detected ${data.detections_count} license plate(s) and saved to database!`, 'success');
+            displayAutoDetectionResults(data);
+            updateMonitoringStatus('Scanning for vehicles...');
+        } else {
+            updateMonitoringStatus('Vehicle processed - no valid plates found. Continuing scan...');
+            setTimeout(() => updateMonitoringStatus('Scanning for vehicles...'), 3000);
+        }
+    });
+
     // Load available cameras
     loadAvailableCameras();
 
@@ -211,8 +316,20 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('refreshCamerasBtn').addEventListener('click', loadAvailableCameras);
     document.getElementById('fullscreenBtn').addEventListener('click', toggleFullscreen);
 
-    // Check initial camera status
+    // Auto-detection event listeners
+    document.getElementById('startAutoBtn').addEventListener('click', startAutoDetection);
+    document.getElementById('stopAutoBtn').addEventListener('click', stopAutoDetection);
+    document.getElementById('testAutoBtn').addEventListener('click', testAutoDetection);
+
+    // Settings sliders
+    document.getElementById('detectionCooldown').addEventListener('input', updateCooldownDisplay);
+    document.getElementById('vehicleConfidence').addEventListener('input', updateConfidenceDisplay);
+    document.getElementById('detectionCooldown').addEventListener('change', updateAutoDetectionSettings);
+    document.getElementById('vehicleConfidence').addEventListener('change', updateAutoDetectionSettings);
+
+    // Check initial status
     checkCameraStatus();
+    checkAutoDetectionStatus();
 });
 
 function loadAvailableCameras() {
@@ -470,7 +587,15 @@ function updateUI() {
         stopBtn.disabled = true;
         captureBtn.disabled = true;
         statusIndicator.innerHTML = '<span class="badge bg-secondary">Stopped</span>';
+
+        // Stop auto-detection if camera stops
+        if (autoDetectionRunning) {
+            stopAutoDetection();
+        }
     }
+
+    // Update auto-detection controls based on camera state
+    updateAutoDetectionUI();
 }
 
 function updateStats(stats) {
@@ -511,6 +636,244 @@ function showAlert(message, type) {
             alert.parentNode.removeChild(alert);
         }
     }, 5000);
+}
+
+// Auto-Detection Functions
+function startAutoDetection() {
+    if (!isRunning) {
+        showAlert('Camera must be running before starting auto-detection', 'warning');
+        return;
+    }
+
+    console.log('Starting auto-detection...');
+
+    const cooldown = document.getElementById('detectionCooldown').value;
+    const confidence = document.getElementById('vehicleConfidence').value / 100;
+
+    fetch('/api/auto-detection/start', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            detection_cooldown: parseInt(cooldown),
+            vehicle_confidence: confidence
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            showAlert(data.error, 'danger');
+        } else {
+            autoDetectionRunning = true;
+            updateAutoDetectionUI();
+            console.log('Auto-detection started successfully');
+            showAlert('🤖 Auto vehicle detection started!', 'success');
+        }
+    })
+    .catch(error => {
+        console.error('Error starting auto-detection:', error);
+        showAlert('Failed to start auto-detection', 'danger');
+    });
+}
+
+function stopAutoDetection() {
+    console.log('Stopping auto-detection...');
+
+    fetch('/api/auto-detection/stop', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        autoDetectionRunning = false;
+        updateAutoDetectionUI();
+        console.log('Auto-detection stopped successfully');
+        showAlert('Auto-detection stopped', 'info');
+    })
+    .catch(error => {
+        console.error('Error stopping auto-detection:', error);
+        showAlert('Failed to stop auto-detection', 'danger');
+    });
+}
+
+function checkAutoDetectionStatus() {
+    fetch('/api/auto-detection/status')
+        .then(response => response.json())
+        .then(data => {
+            autoDetectionRunning = data.running;
+            updateAutoDetectionUI();
+            updateAutoDetectionStats(data.stats);
+
+            // Update settings sliders
+            if (data.settings) {
+                document.getElementById('detectionCooldown').value = data.settings.detection_cooldown;
+                document.getElementById('vehicleConfidence').value = data.settings.vehicle_confidence * 100;
+                updateCooldownDisplay();
+                updateConfidenceDisplay();
+            }
+        })
+        .catch(error => {
+            console.error('Error checking auto-detection status:', error);
+        });
+}
+
+function updateAutoDetectionUI() {
+    const startAutoBtn = document.getElementById('startAutoBtn');
+    const stopAutoBtn = document.getElementById('stopAutoBtn');
+    const autoDetectionStatus = document.getElementById('autoDetectionStatus');
+    const activityIndicator = document.getElementById('autoDetectionActivity');
+
+    if (autoDetectionRunning) {
+        startAutoBtn.disabled = true;
+        stopAutoBtn.disabled = false;
+        autoDetectionStatus.innerHTML = '<span class="badge bg-success status-running">Active</span>';
+        activityIndicator.style.display = 'block';
+
+        // Enable auto-detection only if camera is running
+        startAutoBtn.disabled = !isRunning;
+    } else {
+        startAutoBtn.disabled = !isRunning; // Enable only if camera is running
+        stopAutoBtn.disabled = true;
+        autoDetectionStatus.innerHTML = '<span class="badge bg-secondary">Stopped</span>';
+        activityIndicator.style.display = 'none';
+    }
+}
+
+function updateAutoDetectionStats(stats) {
+    if (stats) {
+        document.getElementById('vehiclesDetected').textContent = stats.vehicles_detected || 0;
+        // plates_processed is included in the general platesDetected count
+    }
+}
+
+function updateCooldownDisplay() {
+    const value = document.getElementById('detectionCooldown').value;
+    document.getElementById('cooldownValue').textContent = value + 's';
+}
+
+function updateConfidenceDisplay() {
+    const value = document.getElementById('vehicleConfidence').value;
+    document.getElementById('confidenceValue').textContent = value + '%';
+}
+
+function updateAutoDetectionSettings() {
+    const cooldown = document.getElementById('detectionCooldown').value;
+    const confidence = document.getElementById('vehicleConfidence').value / 100;
+
+    fetch('/api/auto-detection/settings', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            detection_cooldown: parseInt(cooldown),
+            vehicle_confidence: confidence
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('Settings updated:', data.updated);
+        } else {
+            console.error('Failed to update settings:', data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error updating settings:', error);
+    });
+}
+
+function updateVehicleDetectionIndicator() {
+    // Add visual feedback for vehicle detection
+    const autoStatus = document.getElementById('autoDetectionStatus');
+    autoStatus.style.animation = 'pulse 1s';
+    setTimeout(() => {
+        autoStatus.style.animation = '';
+    }, 1000);
+}
+
+function updateMonitoringStatus(message) {
+    const statusElement = document.getElementById('monitoringStatus');
+    if (statusElement && autoDetectionRunning) {
+        statusElement.textContent = message;
+    }
+}
+
+function displayAutoDetectionResults(data) {
+    // Update the detection results panel with auto-detected results
+    const resultsContainer = document.getElementById('detectionResults');
+
+    let html = `<h6 class="text-success mb-3"><i class="fas fa-robot"></i> Auto-detected ${data.detections_count} plate(s)!</h6>`;
+
+    if (data.detections) {
+        data.detections.forEach(detection => {
+            html += `
+                <div class="detection-result border-success">
+                    <div class="detection-plate">${detection.license_plate}</div>
+                    <div class="detection-confidence">Confidence: ${(detection.confidence * 100).toFixed(1)}%</div>
+                    <div class="detection-time text-success">🤖 Auto-detected: ${new Date().toLocaleTimeString()}</div>
+                </div>
+            `;
+        });
+    }
+
+    html += `
+        <div class="mt-3">
+            <small class="text-success">
+                <i class="fas fa-database"></i>
+                Auto-detected results saved to database
+            </small>
+        </div>
+    `;
+
+    resultsContainer.innerHTML = html;
+}
+
+function testAutoDetection() {
+    console.log('Testing auto-detection system...');
+
+    const testBtn = document.getElementById('testAutoBtn');
+    testBtn.disabled = true;
+    testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...';
+
+    fetch('/api/auto-detection/test', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        testBtn.disabled = false;
+        testBtn.innerHTML = '<i class="fas fa-vial"></i> Test System';
+
+        if (data.error) {
+            showAlert(`Test failed: ${data.error}`, 'danger');
+        } else {
+            let message = `Test completed! Found ${data.vehicles_found} vehicle(s) in test image ${data.test_image}`;
+
+            if (data.anpr_result && data.anpr_result.detections_count > 0) {
+                message += `. Successfully detected ${data.anpr_result.detections_count} license plate(s)!`;
+                showAlert(message, 'success');
+
+                // Display test results
+                displayAutoDetectionResults({
+                    ...data.anpr_result,
+                    detections: data.anpr_result.detections || []
+                });
+            } else if (data.vehicles_found > 0) {
+                message += `, but no valid license plates were detected.`;
+                showAlert(message, 'warning');
+            } else {
+                showAlert(message, 'info');
+            }
+        }
+
+        console.log('Test result:', data);
+    })
+    .catch(error => {
+        testBtn.disabled = false;
+        testBtn.innerHTML = '<i class="fas fa-vial"></i> Test System';
+        console.error('Error testing auto-detection:', error);
+        showAlert('Test failed due to network error', 'danger');
+    });
 }
 </script>
 {% endblock %}
