@@ -1785,6 +1785,31 @@ def get_camera_stats():
         stats['runtime_seconds'] = 0
     return stats
 
+def test_ip_camera_connection(ip_url, timeout=10):
+    """Test if an IP camera URL is accessible"""
+    try:
+        # Basic URL validation
+        if not ip_url.startswith(('http://', 'https://')):
+            return False, "URL must start with http:// or https://"
+
+        # Try to connect to the IP camera
+        cap = cv2.VideoCapture(ip_url)
+        if not cap.isOpened():
+            cap.release()
+            return False, "Cannot connect to IP camera"
+
+        # Try to read a frame to ensure it's working
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret or frame is None:
+            return False, "IP camera connected but no video stream available"
+
+        return True, "IP camera connection successful"
+
+    except Exception as e:
+        return False, f"Connection failed: {str(e)}"
+
 def capture_and_process_frame():
     """Capture a single frame and process it through ANPR"""
     global camera_cap, anpr_processor
@@ -1859,7 +1884,7 @@ def live_camera():
 @admin_required
 @csrf.exempt
 def start_camera():
-    """Start camera for live preview (no processing)"""
+    """Start camera for live preview (supports both camera indices and IP camera URLs)"""
     global camera_cap, camera_running, camera_stats
 
     if camera_running:
@@ -1867,32 +1892,51 @@ def start_camera():
 
     try:
         data = request.get_json() or {}
-        camera_index = data.get('camera_index', 0)
+        camera_source = data.get('camera_index', 0)
+        camera_type = data.get('camera_type', 'usb')  # 'usb' or 'ip'
 
-        logger.info(f"Attempting to start camera with index: {camera_index}")
+        logger.info(f"Attempting to start camera: type={camera_type}, source={camera_source}")
 
-        # Initialize camera
-        camera_cap = cv2.VideoCapture(camera_index)
+        # Handle different camera types
+        if camera_type == 'ip':
+            # IP Camera URL
+            ip_url = str(camera_source)
+            if not ip_url.startswith('http'):
+                return jsonify({'error': 'IP camera URL must start with http:// or https://'}), 400
+
+            logger.info(f"Connecting to IP camera: {ip_url}")
+            camera_cap = cv2.VideoCapture(ip_url)
+        else:
+            # USB Camera index
+            camera_index = int(camera_source)
+            logger.info(f"Connecting to USB camera index: {camera_index}")
+            camera_cap = cv2.VideoCapture(camera_index)
 
         if not camera_cap.isOpened():
             camera_cap = None
-            return jsonify({'error': f'Failed to open camera {camera_index}'}), 500
+            source_name = camera_source if camera_type == 'ip' else f'camera {camera_source}'
+            return jsonify({'error': f'Failed to open {source_name}'}), 500
 
-        # Set camera properties for better performance
-        camera_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        camera_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        camera_cap.set(cv2.CAP_PROP_FPS, 15)
+        # Set camera properties for better performance (mainly for USB cameras)
+        if camera_type == 'usb':
+            camera_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            camera_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            camera_cap.set(cv2.CAP_PROP_FPS, 15)
 
         camera_running = True
         camera_stats['start_time'] = datetime.now().isoformat()
         camera_stats['frames_processed'] = 0
         camera_stats['plates_detected'] = 0
+        camera_stats['camera_type'] = camera_type
+        camera_stats['camera_source'] = camera_source
 
-        logger.info(f"Camera {camera_index} started successfully for preview")
+        source_name = camera_source if camera_type == 'ip' else f'Camera {camera_source}'
+        logger.info(f"{source_name} started successfully for preview")
 
         return jsonify({
             'success': True,
-            'message': f'Camera {camera_index} started successfully',
+            'message': f'{source_name} started successfully',
+            'camera_type': camera_type,
             'stats': get_camera_stats()
         })
 
@@ -2004,10 +2048,10 @@ def camera_status():
 @admin_required
 @csrf.exempt
 def available_cameras():
-    """Get list of available cameras"""
+    """Get list of available cameras (USB and IP options)"""
     cameras = []
 
-    # Test cameras 0-2
+    # Test USB cameras 0-2
     for i in range(3):
         cap = cv2.VideoCapture(i)
         if cap.isOpened():
@@ -2015,11 +2059,56 @@ def available_cameras():
             height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
             cameras.append({
                 'index': i,
+                'type': 'usb',
+                'name': f'USB Camera {i}',
                 'resolution': f"{int(width)}x{int(height)}"
             })
             cap.release()
 
+    # Add IP Camera option
+    cameras.append({
+        'index': 'ip_camera',
+        'type': 'ip',
+        'name': 'IP Camera (Phone/Network Camera)',
+        'resolution': 'Variable'
+    })
+
     return jsonify({'cameras': cameras})
+
+@app.route('/api/camera/test-ip', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def test_ip_camera():
+    """Test IP camera connection"""
+    try:
+        data = request.get_json() or {}
+        ip_url = data.get('ip_url', '').strip()
+
+        if not ip_url:
+            return jsonify({'error': 'IP camera URL is required'}), 400
+
+        logger.info(f"Testing IP camera connection: {ip_url}")
+
+        # Test the connection
+        success, message = test_ip_camera_connection(ip_url)
+
+        if success:
+            return jsonify({
+                'success': True,
+                'message': message,
+                'url': ip_url
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': message,
+                'url': ip_url
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error testing IP camera: {e}")
+        return jsonify({'error': f'Test failed: {str(e)}'}), 500
 
 # --- Auto-Detection API Routes ---
 @app.route('/api/auto-detection/start', methods=['POST'])
