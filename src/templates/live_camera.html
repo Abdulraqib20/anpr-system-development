@@ -7,17 +7,104 @@
     <div class="row">
         <div class="col-md-12">
             <h2 class="mb-4">
-                <i class="fas fa-camera"></i> Live Camera Detection
+                <i class="fas fa-robot"></i> Automatic Number Plate Recognition
             </h2>
         </div>
     </div>
 
-    <!-- Camera Controls -->
+    <!-- Live Camera Preview (Top Section) -->
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5><i class="fas fa-video"></i> Live Camera Feed</h5>
+                    <div>
+                        <button id="fullscreenBtn" class="btn btn-sm btn-outline-secondary">
+                            <i class="fas fa-expand"></i> Fullscreen
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body text-center">
+                    <div id="videoContainer" style="position: relative; max-width: 100%; background: #000;">
+                        <img id="cameraPreview"
+                             src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkNhbWVyYSBQcmV2aWV3IChDbGljayBTdGFydCk8L3RleHQ+PC9zdmc+"
+                             alt="Camera Preview"
+                             class="img-fluid rounded"
+                             style="max-width: 100%; height: auto; min-height: 300px;">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detection Results Panel -->
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-search"></i> Live Detection Results</h5>
+                </div>
+                <div class="card-body">
+                    <div id="detectionResults">
+                        <div class="text-muted text-center p-3">
+                            <i class="fas fa-robot"></i>
+                            Start automatic detection to see results
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Session Statistics -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h5><i class="fas fa-chart-line"></i> Session Stats</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-6">
+                            <div class="border-end">
+                                <h4 class="text-primary mb-1" id="vehiclesDetected">0</h4>
+                                <small class="text-muted">Vehicles Processed</small>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <h4 class="text-success mb-1" id="platesDetected">0</h4>
+                            <small class="text-muted">Plates Found</small>
+                        </div>
+                    </div>
+                    <hr class="my-2">
+                    <div class="text-center">
+                        <small class="text-muted"><strong>Runtime:</strong> <span id="runtime">0s</span></small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h5><i class="fas fa-lightning-bolt"></i> Quick Actions</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
+                            <i class="fas fa-list"></i> View All Detections
+                        </a>
+                        <a href="{{ url_for('admin_watchlists') }}" class="btn btn-outline-warning">
+                            <i class="fas fa-shield-alt"></i> Manage Watchlists
+                        </a>
+                        <a href="{{ url_for('admin_all_alerts') }}" class="btn btn-outline-danger">
+                            <i class="fas fa-exclamation-triangle"></i> View Alerts
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+        <!-- Camera Setup & Detection Controls -->
     <div class="row mb-4">
         <div class="col-md-6">
             <div class="card">
                 <div class="card-header">
-                    <h5>Camera Controls</h5>
+                    <h5><i class="fas fa-cog"></i> Camera Setup</h5>
                 </div>
                 <div class="card-body">
                     <div class="row">
@@ -34,15 +121,15 @@
                                     <input type="text"
                                            id="ipCameraUrl"
                                            class="form-control"
-                                           placeholder="http://192.168.1.100:8080/video"
+                                           placeholder="http://192.168.0.88:8080/video"
                                            value="">
                                     <button id="testIpBtn" class="btn btn-outline-secondary" type="button">
-                                        <i class="fas fa-plug"></i> Test
+                                        <i class="fas fa-plug"></i> Test Connection
                                     </button>
                                 </div>
                                 <small class="text-muted">
                                     <i class="fas fa-info-circle"></i>
-                                    Example: http://192.168.1.100:8080/video (for IP Webcam app)
+                                    Example: http://192.168.0.88:8080/video (for Android's IP Webcam app)
                                 </small>
 
                                 <!-- Quick URL Templates -->
@@ -65,7 +152,7 @@
                         <div class="col-md-4 d-flex align-items-end flex-column">
                             <div class="d-flex gap-2 mb-2">
                                 <button id="startBtn" class="btn btn-success">
-                                    <i class="fas fa-play"></i> Start Preview
+                                    <i class="fas fa-play"></i> Start Camera
                                 </button>
                                 <button id="stopBtn" class="btn btn-danger" disabled>
                                     <i class="fas fa-stop"></i> Stop
@@ -80,25 +167,24 @@
             </div>
         </div>
 
-        <!-- Status Panel -->
+        <!-- System Status Panel -->
         <div class="col-md-6">
             <div class="card">
                 <div class="card-header">
-                    <h5>Status & Statistics</h5>
+                    <h5><i class="fas fa-heartbeat"></i> System Status</h5>
                 </div>
                 <div class="card-body">
                     <div class="row">
                         <div class="col-md-6">
                             <p><strong>Camera:</strong> <span id="statusIndicator" class="badge bg-secondary">Stopped</span></p>
-                            <p><strong>Manual Captures:</strong> <span id="capturesProcessed">0</span></p>
                             <p><strong>Auto-Detection:</strong> <span id="autoDetectionStatus" class="badge bg-secondary">Stopped</span></p>
                         </div>
                         <div class="col-md-6">
-                            <p><strong>Plates Detected:</strong> <span id="platesDetected">0</span></p>
-                            <p><strong>Vehicles Auto-Detected:</strong> <span id="vehiclesDetected">0</span></p>
-                            <p><strong>Runtime:</strong> <span id="runtime">0s</span></p>
+                            <p><strong>Session Runtime:</strong> <span id="runtime">0s</span></p>
+                            <p><strong>Status:</strong> <span id="systemStatus" class="text-muted">Ready</span></p>
                         </div>
                     </div>
+
                 </div>
             </div>
         </div>
@@ -124,8 +210,8 @@
                                 <ol class="small">
                                     <li>Install <strong>"IP Webcam"</strong> app from Google Play Store</li>
                                     <li>Open the app and scroll down to click <strong>"Start server"</strong></li>
-                                    <li>Note the IP address shown (e.g., 192.168.1.100:8080)</li>
-                                    <li>Your camera URL will be: <code>http://192.168.1.100:8080/video</code></li>
+                                    <li>Note the IP address shown (e.g., 192.168.0.88:8080)</li>
+                                    <li>Your camera URL will be: <code>http://192.168.0.88:8080/video</code></li>
                                     <li>Use the "IP Webcam" quick setup button above</li>
                                 </ol>
                             </div>
@@ -151,72 +237,52 @@
         </div>
     </div>
 
-    <!-- Auto-Detection Controls -->
+    <!-- Automatic Detection Controls -->
     <div class="row mb-4">
         <div class="col-md-12">
-            <div class="card border-primary">
-                <div class="card-header bg-primary text-white">
-                    <h5><i class="fas fa-robot"></i> Automatic Vehicle Detection</h5>
+            <div class="card border-success">
+                <div class="card-header bg-success text-white">
+                    <h5><i class="fas fa-robot"></i>Detection System Controls</h5>
                 </div>
                 <div class="card-body">
                     <div class="row">
-                        <div class="col-md-4">
-                            <div class="form-group mb-3">
-                                <label class="form-label">Auto-Detection Mode:</label>
-                                <div class="d-flex gap-2 mb-2">
-                                    <button id="startAutoBtn" class="btn btn-success" disabled>
-                                        <i class="fas fa-play"></i> Start Auto-Detection
+                        <div class="col-md-8">
+                            <div class="d-flex gap-3 align-items-center">
+                                <div>
+                                    <button id="startAutoBtn" class="btn btn-success btn-lg" disabled>
+                                        <i class="fas fa-play"></i> Start Automatic Detection
                                     </button>
-                                    <button id="stopAutoBtn" class="btn btn-danger" disabled>
-                                        <i class="fas fa-stop"></i> Stop Auto-Detection
-                                    </button>
-                                </div>
-                                <div class="d-flex gap-2">
-                                    <button id="testAutoBtn" class="btn btn-outline-secondary btn-sm">
-                                        <i class="fas fa-vial"></i> Test System
+                                    <button id="stopAutoBtn" class="btn btn-danger btn-lg" disabled>
+                                        <i class="fas fa-stop"></i> Stop Detection
                                     </button>
                                 </div>
-                                <small class="text-muted">Automatically processes frames when vehicles are detected</small>
+                                <div class="vr"></div>
+                                <div>
+                                    <button id="testAutoBtn" class="btn btn-outline-info">
+                                        <i class="fas fa-vial"></i> Test ANPR System
+                                    </button>
+                                </div>
                             </div>
+                            <!-- <div class="mt-3">
+                                <div class="alert alert-info mb-0">
+                                    <i class="fas fa-brain"></i>
+                                    <strong>Smart Detection:</strong> The system continuously monitors for vehicles with intelligent duplicate prevention,
+                                    optimized intervals, and minimal API usage. Each unique vehicle is processed only once per session.
+                                </div>
+                            </div> -->
                         </div>
                         <div class="col-md-4">
-                            <div class="form-group mb-3">
-                                <label for="detectionCooldown" class="form-label">Detection Cooldown (seconds):</label>
-                                <input type="range" class="form-range" id="detectionCooldown" min="5" max="30" value="10">
-                                <div class="d-flex justify-content-between">
-                                    <small>5s</small>
-                                    <span id="cooldownValue">10s</span>
-                                    <small>30s</small>
+                            <div class="text-center">
+                                <div id="autoDetectionActivity" class="alert alert-success" style="display: none;">
+                                    <i class="fas fa-eye"></i>
+                                    <strong>Status:</strong> <span id="monitoringStatus">Scanning for vehicles...</span>
+                                    <div class="spinner-border spinner-border-sm ms-2" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
                                 </div>
-                                <small class="text-muted">Time between automatic detections</small>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-group mb-3">
-                                <label for="vehicleConfidence" class="form-label">Vehicle Detection Confidence:</label>
-                                <input type="range" class="form-range" id="vehicleConfidence" min="50" max="95" value="70">
-                                <div class="d-flex justify-content-between">
-                                    <small>50%</small>
-                                    <span id="confidenceValue">70%</span>
-                                    <small>95%</small>
-                                </div>
-                                <small class="text-muted">Minimum confidence for vehicle detection</small>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="alert alert-info">
-                                <i class="fas fa-info-circle"></i>
-                                <strong>How it works:</strong> When auto-detection is enabled, the system continuously monitors the camera feed.
-                                When a vehicle is detected with sufficient confidence, it automatically captures and processes the frame through
-                                the complete ANPR pipeline (license plate detection, OCR, vehicle color detection, etc.) and saves results to the database.
-                            </div>
-                            <div id="autoDetectionActivity" class="alert alert-success" style="display: none;">
-                                <i class="fas fa-eye"></i>
-                                <strong>Monitoring:</strong> <span id="monitoringStatus">Scanning for vehicles...</span>
-                                <div class="spinner-border spinner-border-sm ms-2" role="status">
-                                    <span class="visually-hidden">Loading...</span>
+                                <div id="detectionInactive" class="alert alert-secondary">
+                                    <i class="fas fa-pause"></i>
+                                    <strong>Detection:</strong> Inactive
                                 </div>
                             </div>
                         </div>
@@ -226,79 +292,7 @@
         </div>
     </div>
 
-    <!-- Live Camera Preview and Capture -->
-    <div class="row">
-        <div class="col-md-8">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h5>Live Preview</h5>
-                    <div>
-                        <button id="captureBtn" class="btn btn-primary me-2" disabled>
-                            <i class="fas fa-camera"></i> Capture & Analyze
-                        </button>
-                        <button id="fullscreenBtn" class="btn btn-sm btn-outline-secondary">
-                            <i class="fas fa-expand"></i> Fullscreen
-                        </button>
-                    </div>
-                </div>
-                <div class="card-body text-center">
-                    <div id="videoContainer" style="position: relative; max-width: 100%; background: #000;">
-                        <img id="cameraPreview"
-                             src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkNhbWVyYSBQcmV2aWV3IChDbGljayBTdGFydCk8L3RleHQ+PC9zdmc+"
-                             alt="Camera Preview"
-                             class="img-fluid rounded"
-                             style="max-width: 100%; height: auto; min-height: 300px;">
-                    </div>
-
-                    <!-- Capture Instructions -->
-                    <div class="mt-3">
-                        <small class="text-muted">
-                            <i class="fas fa-info-circle"></i>
-
-                        </small>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Results Panel -->
-        <div class="col-md-4">
-            <div class="card">
-                <div class="card-header">
-                    <h5>Detection Results</h5>
-                </div>
-                <div class="card-body">
-                    <div id="detectionResults">
-                        <div class="text-muted text-center p-3">
-                            <i class="fas fa-search"></i>
-                            Capture an image to see detection results
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Quick Actions -->
-            <div class="card mt-3">
-                <div class="card-header">
-                    <h5>Quick Actions</h5>
-                </div>
-                <div class="card-body">
-                    <div class="d-grid gap-2">
-                        <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
-                            <i class="fas fa-list"></i> View All Detections
-                        </a>
-                        <a href="{{ url_for('admin_watchlists') }}" class="btn btn-outline-warning">
-                            <i class="fas fa-shield-alt"></i> Manage Watchlists
-                        </a>
-                        <a href="{{ url_for('admin_all_alerts') }}" class="btn btn-outline-danger">
-                            <i class="fas fa-exclamation-triangle"></i> View Alerts
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
-</div>
 
 <!-- Success Modal -->
 <div class="modal fade" id="successModal" tabindex="-1">
@@ -360,7 +354,7 @@ let isConnected = false;
 let isRunning = false;
 let autoDetectionRunning = false;
 let previewInterval;
-let capturesProcessed = 0;
+// Manual capture functionality removed - using automatic detection only
 let socket;
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -393,10 +387,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load available cameras
     loadAvailableCameras();
 
-    // Event listeners
+        // Event listeners
     document.getElementById('startBtn').addEventListener('click', startCamera);
     document.getElementById('stopBtn').addEventListener('click', stopCamera);
-    document.getElementById('captureBtn').addEventListener('click', captureAndProcess);
     document.getElementById('refreshCamerasBtn').addEventListener('click', loadAvailableCameras);
     document.getElementById('fullscreenBtn').addEventListener('click', toggleFullscreen);
 
@@ -408,12 +401,6 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('startAutoBtn').addEventListener('click', startAutoDetection);
     document.getElementById('stopAutoBtn').addEventListener('click', stopAutoDetection);
     document.getElementById('testAutoBtn').addEventListener('click', testAutoDetection);
-
-    // Settings sliders
-    document.getElementById('detectionCooldown').addEventListener('input', updateCooldownDisplay);
-    document.getElementById('vehicleConfidence').addEventListener('input', updateConfidenceDisplay);
-    document.getElementById('detectionCooldown').addEventListener('change', updateAutoDetectionSettings);
-    document.getElementById('vehicleConfidence').addEventListener('change', updateAutoDetectionSettings);
 
     // Check initial status
     checkCameraStatus();
@@ -518,13 +505,13 @@ function fillIpTemplate(template) {
 
     switch(template) {
         case 'ip_webcam':
-            templateUrl = 'http://192.168.1.100:8080/video';
+            templateUrl = 'http://192.168.0.88:8080/video';
             break;
         case 'droidcam':
-            templateUrl = 'http://192.168.1.100:4747/mjpegfeed?640x480';
+            templateUrl = 'http://192.168.0.88:4747/mjpegfeed?640x480';
             break;
         case 'generic':
-            templateUrl = 'http://192.168.1.100:8080/mjpeg';
+            templateUrl = 'http://192.168.0.88:8080/mjpeg';
             break;
     }
 
@@ -572,8 +559,8 @@ function startCamera() {
             isRunning = true;
             updateUI();
             startPreview();
-            console.log('Camera started successfully');
-            showAlert(data.message, 'success');
+            console.log('Camera started successfully - ready for automatic detection');
+            showAlert(data.message + ' - Ready for intelligent detection!', 'success');
         }
     })
     .catch(error => {
@@ -640,49 +627,7 @@ function updatePreview() {
         });
 }
 
-function captureAndProcess() {
-    if (!isRunning) {
-        showAlert('Camera is not running', 'warning');
-        return;
-    }
-
-    console.log('Capturing and processing frame...');
-
-    // Temporarily disable the capture button to prevent multiple clicks
-    const captureBtn = document.getElementById('captureBtn');
-    captureBtn.disabled = true;
-
-    fetch('/api/camera/capture', {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        // Re-enable capture button
-        captureBtn.disabled = false;
-
-        if (data.error) {
-            showAlert(data.error, 'danger');
-        } else {
-            capturesProcessed++;
-            updateStats(data.stats || {});
-            displayDetectionResults(data);
-
-            if (data.detections_count > 0) {
-                showAlert(`SUCCESS! Found ${data.detections_count} VALID license plate(s) - saved to database!`, 'success');
-            } else if (data.total_detections_found > 0) {
-                showAlert(`Image processed - found ${data.total_detections_found} detections but none were valid license plates`, 'warning');
-            } else {
-                showAlert('Image captured and processed - no license plates detected', 'info');
-            }
-        }
-    })
-    .catch(error => {
-        console.error('Capture failed:', error);
-        // Re-enable capture button
-        captureBtn.disabled = false;
-        showAlert('Failed to capture and process image', 'danger');
-    });
-}
+// Manual capture functionality removed - using automatic detection only
 
 function displayDetectionResults(data) {
     const resultsContainer = document.getElementById('detectionResults');
@@ -765,19 +710,19 @@ function checkCameraStatus() {
 function updateUI() {
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
-    const captureBtn = document.getElementById('captureBtn');
     const statusIndicator = document.getElementById('statusIndicator');
+    const systemStatus = document.getElementById('systemStatus');
 
     if (isRunning) {
         startBtn.disabled = true;
         stopBtn.disabled = false;
-        captureBtn.disabled = false;
-        statusIndicator.innerHTML = '<span class="badge bg-success status-running">Running</span>';
+        statusIndicator.innerHTML = '<span class="badge bg-success status-running">Active</span>';
+        systemStatus.innerHTML = '<span class="text-success">Camera Ready</span>';
     } else {
         startBtn.disabled = false;
         stopBtn.disabled = true;
-        captureBtn.disabled = true;
         statusIndicator.innerHTML = '<span class="badge bg-secondary">Stopped</span>';
+        systemStatus.innerHTML = '<span class="text-muted">Ready</span>';
 
         // Stop auto-detection if camera stops
         if (autoDetectionRunning) {
@@ -791,8 +736,8 @@ function updateUI() {
 
 function updateStats(stats) {
     if (stats) {
-        document.getElementById('capturesProcessed').textContent = capturesProcessed;
         document.getElementById('platesDetected').textContent = stats.plates_detected || 0;
+        document.getElementById('vehiclesDetected').textContent = stats.vehicles_detected || 0;
         document.getElementById('runtime').textContent = `${stats.runtime_seconds || 0}s`;
     }
 }
@@ -832,14 +777,11 @@ function showAlert(message, type) {
 // Auto-Detection Functions
 function startAutoDetection() {
     if (!isRunning) {
-        showAlert('Camera must be running before starting auto-detection', 'warning');
+        showAlert('Camera must be running before starting automatic detection', 'warning');
         return;
     }
 
-    console.log('Starting auto-detection...');
-
-    const cooldown = document.getElementById('detectionCooldown').value;
-    const confidence = document.getElementById('vehicleConfidence').value / 100;
+    console.log('Starting intelligent auto-detection...');
 
     fetch('/api/auto-detection/start', {
         method: 'POST',
@@ -847,8 +789,7 @@ function startAutoDetection() {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            detection_cooldown: parseInt(cooldown),
-            vehicle_confidence: confidence
+            intelligent_mode: true  // Use optimized detection settings
         })
     })
     .then(response => response.json())
@@ -858,13 +799,13 @@ function startAutoDetection() {
         } else {
             autoDetectionRunning = true;
             updateAutoDetectionUI();
-            console.log('Auto-detection started successfully');
-            showAlert('🤖 Auto vehicle detection started!', 'success');
+            console.log('Intelligent auto-detection started successfully');
+            showAlert('🧠 Intelligent vehicle detection started with duplicate prevention!', 'success');
         }
     })
     .catch(error => {
         console.error('Error starting auto-detection:', error);
-        showAlert('Failed to start auto-detection', 'danger');
+        showAlert('Failed to start automatic detection', 'danger');
     });
 }
 
@@ -894,14 +835,6 @@ function checkAutoDetectionStatus() {
             autoDetectionRunning = data.running;
             updateAutoDetectionUI();
             updateAutoDetectionStats(data.stats);
-
-            // Update settings sliders
-            if (data.settings) {
-                document.getElementById('detectionCooldown').value = data.settings.detection_cooldown;
-                document.getElementById('vehicleConfidence').value = data.settings.vehicle_confidence * 100;
-                updateCooldownDisplay();
-                updateConfidenceDisplay();
-            }
         })
         .catch(error => {
             console.error('Error checking auto-detection status:', error);
@@ -913,20 +846,20 @@ function updateAutoDetectionUI() {
     const stopAutoBtn = document.getElementById('stopAutoBtn');
     const autoDetectionStatus = document.getElementById('autoDetectionStatus');
     const activityIndicator = document.getElementById('autoDetectionActivity');
+    const detectionInactive = document.getElementById('detectionInactive');
 
     if (autoDetectionRunning) {
         startAutoBtn.disabled = true;
         stopAutoBtn.disabled = false;
         autoDetectionStatus.innerHTML = '<span class="badge bg-success status-running">Active</span>';
         activityIndicator.style.display = 'block';
-
-        // Enable auto-detection only if camera is running
-        startAutoBtn.disabled = !isRunning;
+        detectionInactive.style.display = 'none';
     } else {
         startAutoBtn.disabled = !isRunning; // Enable only if camera is running
         stopAutoBtn.disabled = true;
         autoDetectionStatus.innerHTML = '<span class="badge bg-secondary">Stopped</span>';
         activityIndicator.style.display = 'none';
+        detectionInactive.style.display = 'block';
     }
 }
 
@@ -937,42 +870,7 @@ function updateAutoDetectionStats(stats) {
     }
 }
 
-function updateCooldownDisplay() {
-    const value = document.getElementById('detectionCooldown').value;
-    document.getElementById('cooldownValue').textContent = value + 's';
-}
-
-function updateConfidenceDisplay() {
-    const value = document.getElementById('vehicleConfidence').value;
-    document.getElementById('confidenceValue').textContent = value + '%';
-}
-
-function updateAutoDetectionSettings() {
-    const cooldown = document.getElementById('detectionCooldown').value;
-    const confidence = document.getElementById('vehicleConfidence').value / 100;
-
-    fetch('/api/auto-detection/settings', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            detection_cooldown: parseInt(cooldown),
-            vehicle_confidence: confidence
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            console.log('Settings updated:', data.updated);
-        } else {
-            console.error('Failed to update settings:', data.error);
-        }
-    })
-    .catch(error => {
-        console.error('Error updating settings:', error);
-    });
-}
+// Settings functions removed - using intelligent detection with optimal defaults
 
 function updateVehicleDetectionIndicator() {
     // Add visual feedback for vehicle detection
@@ -1033,7 +931,7 @@ function testAutoDetection() {
     .then(response => response.json())
     .then(data => {
         testBtn.disabled = false;
-        testBtn.innerHTML = '<i class="fas fa-vial"></i> Test System';
+        testBtn.innerHTML = '<i class="fas fa-vial"></i> Test ANPR System';
 
         if (data.error) {
             showAlert(`Test failed: ${data.error}`, 'danger');
@@ -1061,7 +959,7 @@ function testAutoDetection() {
     })
     .catch(error => {
         testBtn.disabled = false;
-        testBtn.innerHTML = '<i class="fas fa-vial"></i> Test System';
+        testBtn.innerHTML = '<i class="fas fa-vial"></i> Test ANPR System';
         console.error('Error testing auto-detection:', error);
         showAlert('Test failed due to network error', 'danger');
     });

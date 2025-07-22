@@ -54,17 +54,28 @@ auto_detection_stats = {
 }
 
 class AutoDetectionManager:
-    """Manages automatic vehicle detection and ANPR processing"""
+    """Manages intelligent automatic vehicle detection and ANPR processing with duplicate prevention"""
 
     def __init__(self, anpr_processor, socketio_instance):
         self.anpr_processor = anpr_processor
         self.socketio = socketio_instance
         self.vehicle_model = YOLO("models/yolov8n.pt")  # Lighter model for real-time detection
         self.running = False
-        self.detection_cooldown = 10  # seconds between detections
-        self.vehicle_confidence = 0.7
+
+        # Intelligent detection settings (optimized for cost efficiency)
+        self.detection_cooldown = 8  # seconds between detections (reduced from 10)
+        self.vehicle_confidence = 0.65  # slightly lower confidence for better coverage
         self.last_detection_time = 0
-        self.processed_vehicles = {}  # hash -> timestamp mapping
+
+        # Enhanced duplicate prevention
+        self.processed_vehicles = {}  # vehicle_fingerprint -> {timestamp, plate_results}
+        self.session_plates = []  # Track plates detected in current session
+        self.vehicle_memory_duration = 60  # Remember vehicles for 60 seconds
+        self.plate_memory_duration = 300  # Remember plates for 5 minutes to prevent session duplicates
+
+        # Performance optimization
+        self.frame_skip_counter = 0
+        self.frame_skip_interval = 3  # Process every 3rd frame for efficiency
 
     def detect_vehicles_in_frame(self, frame):
         """Detect vehicles in frame using YOLOv8"""
@@ -97,39 +108,77 @@ class AutoDetectionManager:
             logger.error(f"Error detecting vehicles: {e}")
             return []
 
-    def should_process_vehicle(self, vehicle):
-        """Check if vehicle should be processed based on cooldown and uniqueness"""
+    def generate_vehicle_fingerprint(self, vehicle, frame_shape):
+        """Generate a unique fingerprint for a vehicle based on position, size, and characteristics"""
+        x1, y1, x2, y2 = vehicle['box']
+        frame_height, frame_width = frame_shape[:2]
+
+        # Normalize position and size relative to frame
+        center_x = (x1 + x2) / 2 / frame_width
+        center_y = (y1 + y2) / 2 / frame_height
+        width_ratio = (x2 - x1) / frame_width
+        height_ratio = (y2 - y1) / frame_height
+
+        # Create fingerprint with reduced precision for grouping similar vehicles
+        fingerprint = f"{center_x:.2f}_{center_y:.2f}_{width_ratio:.2f}_{height_ratio:.2f}_{vehicle['class']}"
+        return fingerprint
+
+    def should_process_vehicle(self, vehicle, frame_shape):
+        """Intelligent vehicle processing decision with enhanced duplicate prevention"""
         current_time = time.time()
 
         # Check global cooldown
         if current_time - self.last_detection_time < self.detection_cooldown:
             return False
 
-        # Create a simple hash for vehicle position/size to avoid duplicate processing
-        x1, y1, x2, y2 = vehicle['box']
-        vehicle_hash = f"{x1//10}_{y1//10}_{x2//10}_{y2//10}"  # Reduce precision for grouping
+        # Generate vehicle fingerprint
+        vehicle_fingerprint = self.generate_vehicle_fingerprint(vehicle, frame_shape)
 
-        # Check if we've processed a similar vehicle recently
-        if vehicle_hash in self.processed_vehicles:
-            last_time = self.processed_vehicles[vehicle_hash]
-            if current_time - last_time < self.detection_cooldown * 2:  # Longer cooldown for similar vehicles
+        # Check if we've processed this vehicle recently
+        if vehicle_fingerprint in self.processed_vehicles:
+            vehicle_data = self.processed_vehicles[vehicle_fingerprint]
+            last_time = vehicle_data['timestamp']
+
+            # If vehicle was seen recently, skip processing
+            if current_time - last_time < self.vehicle_memory_duration:
+                logger.debug(f"Skipping recently processed vehicle: {vehicle_fingerprint}")
                 return False
 
-        # Update tracking
-        self.processed_vehicles[vehicle_hash] = current_time
+            # If vehicle had successful plate detection, wait longer before reprocessing
+            if vehicle_data.get('had_plates', False):
+                if current_time - last_time < self.vehicle_memory_duration * 2:
+                    logger.debug(f"Skipping vehicle with recent plate detection: {vehicle_fingerprint}")
+                    return False
+
+        # Vehicle passed all checks, mark for processing
         self.last_detection_time = current_time
 
-        # Clean old entries
-        self.processed_vehicles = {
-            k: v for k, v in self.processed_vehicles.items()
-            if current_time - v < self.detection_cooldown * 5
-        }
+        # Clean old entries to prevent memory growth
+        self.cleanup_old_entries(current_time)
 
         return True
 
+    def cleanup_old_entries(self, current_time):
+        """Clean up old vehicle and plate tracking entries"""
+        # Clean old vehicle entries
+        self.processed_vehicles = {
+            fingerprint: data for fingerprint, data in self.processed_vehicles.items()
+            if current_time - data['timestamp'] < self.vehicle_memory_duration * 3
+        }
+
+        # Clean old session plates (keep for longer to prevent duplicates)
+        self.session_plates = [
+            plate_info for plate_info in self.session_plates
+            if isinstance(plate_info, dict) and 'timestamp' in plate_info
+            and current_time - plate_info['timestamp'] <= self.plate_memory_duration
+        ]
+
     def process_detected_vehicle(self, frame, vehicle):
-        """Process frame through ANPR pipeline when vehicle is detected"""
+        """Process frame through ANPR pipeline with intelligent duplicate prevention"""
         try:
+            current_time = time.time()
+            vehicle_fingerprint = self.generate_vehicle_fingerprint(vehicle, frame.shape)
+
             logger.info(f"Auto-processing vehicle detection with confidence {vehicle['confidence']:.2f}")
 
             # Emit real-time update to connected clients
@@ -144,39 +193,74 @@ class AutoDetectionManager:
             # Process through existing ANPR system
             annotated_frame, detections = self.anpr_processor.process_image(frame)
 
-            # Generate filename for annotated frame
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            annotated_filename = f"auto_capture_{timestamp}.jpg"
-
-            # Save annotated frame
-            output_dir = Path("output_plates")
-            output_dir.mkdir(exist_ok=True)
-            annotated_path = output_dir / annotated_filename
-
-            saved_filename = None
-            try:
-                success = cv2.imwrite(str(annotated_path), annotated_frame)
-                if success:
-                    saved_filename = annotated_filename
-                    logger.info(f"Saved auto-detected frame: {annotated_filename}")
-            except Exception as e:
-                logger.error(f"Error saving auto-detected frame: {e}")
-
-            # Save to database if detections found
-            detection_results = {
-                'success': True,
-                'detections_count': len(detections) if detections else 0,
-                'detections': detections,
-                'annotated_image': saved_filename,
-                'timestamp': timestamp,
-                'auto_detected': True
-            }
+            # Filter out duplicate plates within session
+            unique_detections = []
+            new_plates_found = False
 
             if detections:
+                for detection in detections:
+                    plate_text = detection.get('license_plate', '').strip().upper()
+                    if plate_text:
+                        # Check if this plate was already detected in current session
+                        plate_already_seen = any(
+                            plate_text == existing_plate.get('plate', '')
+                            for existing_plate in self.session_plates
+                            if isinstance(existing_plate, dict)
+                        )
+
+                        if not plate_already_seen:
+                            unique_detections.append(detection)
+                            # Add to session tracking
+                            self.session_plates.append({
+                                'plate': plate_text,
+                                'timestamp': current_time,
+                                'vehicle_fingerprint': vehicle_fingerprint
+                            })
+                            new_plates_found = True
+                            logger.info(f"New unique plate detected: {plate_text}")
+                        else:
+                            logger.info(f"Skipping duplicate plate in session: {plate_text}")
+
+            # Update vehicle tracking with results
+            self.processed_vehicles[vehicle_fingerprint] = {
+                'timestamp': current_time,
+                'had_plates': len(unique_detections) > 0,
+                'plates_count': len(unique_detections)
+            }
+
+            # Only save to database if we have new unique plates
+            detection_results = {
+                'success': True,
+                'detections_count': len(unique_detections),
+                'detections': unique_detections,
+                'annotated_image': None,
+                'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3],
+                'auto_detected': True,
+                'duplicate_prevention': True
+            }
+
+            if unique_detections:
+                # Generate filename for annotated frame only if we have unique detections
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                annotated_filename = f"auto_capture_{timestamp}.jpg"
+
+                # Save annotated frame
+                output_dir = Path("output_plates")
+                output_dir.mkdir(exist_ok=True)
+                annotated_path = output_dir / annotated_filename
+
                 try:
-                    self.anpr_processor.save_to_database(detections, annotated_frame_filename=saved_filename)
-                    auto_detection_stats['plates_processed'] += len(detections)
-                    logger.info(f"Auto-detection: Saved {len(detections)} detections to database")
+                    success = cv2.imwrite(str(annotated_path), annotated_frame)
+                    if success:
+                        detection_results['annotated_image'] = annotated_filename
+                        logger.info(f"Saved auto-detected frame with new plates: {annotated_filename}")
+                except Exception as e:
+                    logger.error(f"Error saving auto-detected frame: {e}")
+
+                try:
+                    self.anpr_processor.save_to_database(unique_detections, annotated_frame_filename=annotated_filename)
+                    auto_detection_stats['plates_processed'] += len(unique_detections)
+                    logger.info(f"Auto-detection: Saved {len(unique_detections)} new unique detections to database")
 
                     # Emit successful detection to clients
                     if self.socketio:
@@ -184,6 +268,11 @@ class AutoDetectionManager:
 
                 except Exception as e:
                     logger.error(f"Error saving auto-detections to database: {e}")
+            else:
+                if detections:
+                    logger.info(f"All {len(detections)} detected plates were duplicates - skipping database save")
+                else:
+                    logger.info("No license plates detected in vehicle")
 
             # Update stats
             auto_detection_stats['vehicles_detected'] += 1
@@ -196,10 +285,10 @@ class AutoDetectionManager:
             return {'error': f'Auto-processing failed: {str(e)}'}
 
     def auto_detection_loop(self, camera_cap):
-        """Main auto-detection loop that runs in background thread"""
+        """Intelligent auto-detection loop with frame skipping and optimized processing"""
         global auto_detection_running
 
-        logger.info("Starting auto vehicle detection loop")
+        logger.info("Starting intelligent auto vehicle detection loop with duplicate prevention")
 
         while auto_detection_running and camera_cap:
             try:
@@ -213,6 +302,14 @@ class AutoDetectionManager:
                     time.sleep(0.1)
                     continue
 
+                # Frame skipping for performance optimization
+                self.frame_skip_counter += 1
+                if self.frame_skip_counter < self.frame_skip_interval:
+                    time.sleep(0.1)
+                    continue
+
+                self.frame_skip_counter = 0
+
                 # Detect vehicles
                 vehicles = self.detect_vehicles_in_frame(frame)
 
@@ -221,11 +318,14 @@ class AutoDetectionManager:
                     # Sort by area to get largest vehicle
                     largest_vehicle = max(vehicles, key=lambda v: v['area'])
 
-                    if self.should_process_vehicle(largest_vehicle):
+                    if self.should_process_vehicle(largest_vehicle, frame.shape):
                         self.process_detected_vehicle(frame, largest_vehicle)
 
-                # Small delay to prevent overwhelming the system
-                time.sleep(0.5)  # Check every 500ms
+                # Adaptive delay - smaller when vehicles are present
+                if vehicles:
+                    time.sleep(0.3)  # Faster checking when vehicles detected
+                else:
+                    time.sleep(0.7)  # Slower when no vehicles
 
             except Exception as e:
                 logger.error(f"Error in auto-detection loop: {e}")
@@ -1944,24 +2044,7 @@ def start_camera():
         logger.error(f"Error starting camera: {e}")
         return jsonify({'error': f'Failed to start camera: {str(e)}'}), 500
 
-@app.route('/api/camera/capture', methods=['POST'])
-@login_required
-@admin_required
-@csrf.exempt
-def capture_frame():
-    """Capture and process a single frame"""
-    global camera_running
-
-    if not camera_running:
-        return jsonify({'error': 'Camera is not running'}), 400
-
-    # Capture and process frame
-    result = capture_and_process_frame()
-
-    if 'error' in result:
-        return jsonify(result), 500
-
-    return jsonify(result)
+# Manual capture endpoint removed - using automatic detection only
 
 @app.route('/api/camera/preview')
 @login_required
@@ -2116,34 +2199,33 @@ def test_ip_camera():
 @admin_required
 @csrf.exempt
 def start_auto_detection():
-    """Start automatic vehicle detection"""
+    """Start intelligent automatic vehicle detection with duplicate prevention"""
     global auto_detection_running, auto_detection_thread, auto_detection_manager, camera_cap, camera_running
 
     if not camera_running or not camera_cap:
-        return jsonify({'error': 'Camera must be running before starting auto-detection'}), 400
+        return jsonify({'error': 'Camera must be running before starting automatic detection'}), 400
 
     if auto_detection_running:
-        return jsonify({'error': 'Auto-detection is already running'}), 400
+        return jsonify({'error': 'Automatic detection is already running'}), 400
 
     if not auto_detection_manager:
         return jsonify({'error': 'Auto-detection manager not initialized'}), 500
 
     try:
         data = request.get_json() or {}
+        intelligent_mode = data.get('intelligent_mode', True)
 
-        # Update settings if provided
-        if 'detection_cooldown' in data:
-            auto_detection_manager.detection_cooldown = max(5, int(data['detection_cooldown']))
-            auto_detection_stats['detection_cooldown'] = auto_detection_manager.detection_cooldown
-
-        if 'vehicle_confidence' in data:
-            auto_detection_manager.vehicle_confidence = max(0.5, min(1.0, float(data['vehicle_confidence'])))
-            auto_detection_stats['vehicle_confidence_threshold'] = auto_detection_manager.vehicle_confidence
+        # Reset session tracking for new session
+        auto_detection_manager.session_plates.clear()
+        auto_detection_manager.processed_vehicles.clear()
+        auto_detection_manager.frame_skip_counter = 0
 
         auto_detection_running = True
         auto_detection_stats['start_time'] = datetime.now().isoformat()
         auto_detection_stats['vehicles_detected'] = 0
         auto_detection_stats['plates_processed'] = 0
+        auto_detection_stats['session_id'] = datetime.now().strftime("%Y%m%d_%H%M%S")
+        auto_detection_stats['intelligent_mode'] = intelligent_mode
 
         # Start auto-detection thread
         auto_detection_thread = threading.Thread(
@@ -2153,14 +2235,16 @@ def start_auto_detection():
         )
         auto_detection_thread.start()
 
-        logger.info("Auto vehicle detection started successfully")
+        logger.info("Intelligent auto vehicle detection started successfully with duplicate prevention")
 
         return jsonify({
             'success': True,
-            'message': 'Auto vehicle detection started',
-            'settings': {
-                'detection_cooldown': auto_detection_manager.detection_cooldown,
-                'vehicle_confidence': auto_detection_manager.vehicle_confidence
+            'message': 'Intelligent vehicle detection started with duplicate prevention',
+            'features': {
+                'duplicate_prevention': True,
+                'intelligent_intervals': True,
+                'session_tracking': True,
+                'api_optimization': True
             },
             'stats': auto_detection_stats
         })
@@ -2201,59 +2285,28 @@ def stop_auto_detection():
 @admin_required
 @csrf.exempt
 def auto_detection_status():
-    """Get auto-detection status"""
-    return jsonify({
+    """Get intelligent auto-detection status"""
+    status_info = {
         'running': auto_detection_running,
         'stats': auto_detection_stats,
-        'settings': {
-            'detection_cooldown': auto_detection_manager.detection_cooldown if auto_detection_manager else 10,
-            'vehicle_confidence': auto_detection_manager.vehicle_confidence if auto_detection_manager else 0.7
+        'intelligent_features': {
+            'duplicate_prevention': True,
+            'session_tracking': True,
+            'adaptive_intervals': True,
+            'api_optimization': True
         }
-    })
+    }
 
-@app.route('/api/auto-detection/settings', methods=['POST'])
-@login_required
-@admin_required
-@csrf.exempt
-def update_auto_detection_settings():
-    """Update auto-detection settings"""
-    global auto_detection_manager
+    if auto_detection_manager:
+        status_info['session_info'] = {
+            'unique_vehicles_processed': len(auto_detection_manager.processed_vehicles),
+            'unique_plates_in_session': len(auto_detection_manager.session_plates),
+            'memory_efficiency': 'optimized'
+        }
 
-    if not auto_detection_manager:
-        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+    return jsonify(status_info)
 
-    try:
-        data = request.get_json() or {}
-
-        updated = {}
-
-        if 'detection_cooldown' in data:
-            cooldown = max(5, int(data['detection_cooldown']))
-            auto_detection_manager.detection_cooldown = cooldown
-            auto_detection_stats['detection_cooldown'] = cooldown
-            updated['detection_cooldown'] = cooldown
-
-        if 'vehicle_confidence' in data:
-            confidence = max(0.5, min(1.0, float(data['vehicle_confidence'])))
-            auto_detection_manager.vehicle_confidence = confidence
-            auto_detection_stats['vehicle_confidence_threshold'] = confidence
-            updated['vehicle_confidence'] = confidence
-
-        logger.info(f"Auto-detection settings updated: {updated}")
-
-        return jsonify({
-            'success': True,
-            'message': 'Settings updated successfully',
-            'updated': updated,
-            'current_settings': {
-                'detection_cooldown': auto_detection_manager.detection_cooldown,
-                'vehicle_confidence': auto_detection_manager.vehicle_confidence
-            }
-        })
-
-    except Exception as e:
-        logger.error(f"Error updating auto-detection settings: {e}")
-        return jsonify({'error': f'Failed to update settings: {str(e)}'}), 500
+# Auto-detection settings endpoint removed - using intelligent optimization with fixed optimal parameters
 
 @app.route('/api/auto-detection/test', methods=['POST'])
 @login_required
