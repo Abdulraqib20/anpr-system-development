@@ -434,7 +434,7 @@ logger.info(f"DB Config: Host={DB_HOST}, DB={DB_NAME}, User={DB_USER}, Port={DB_
 try:
     db_pool = SimpleConnectionPool(
         minconn=1,
-        maxconn=5, # Adjust max connections as needed
+        maxconn=500, # Adjust max connections as needed
         host=DB_HOST,
         dbname=DB_NAME,
         user=DB_USER,
