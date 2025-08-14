@@ -1,99 +1,107 @@
 ﻿# 🚘 Automatic Number Plate Recognition (ANPR) System
 
-Production-ready ANPR for images, video, and live cameras with web dashboard, alerts, analytics, vehicle type/color, and car-brand detection.
+Production-grade ANPR for images, video, and live cameras with a secure Flask admin dashboard, watchlists, real-time alerts, analytics, and PostgreSQL storage.
 
-- Python • OpenCV • Ultralytics YOLO • TensorFlow/Keras • PaddleOCR / Groq Vision OCR • Flask + Socket.IO • PostgreSQL
-
----
-
-## 🌟 Overview
-
-This project detects Nigerian vehicle license plates from images, videos, or live camera streams, recognizes plate text, infers vehicle type and color, optionally detects car brand, and stores rich detections in PostgreSQL. It ships with a modern Flask web app (with authentication and admin tools) to upload images, run live camera capture, manage watchlists, receive alerts, and view analytics.
-
-Key highlights:
-- YOLO-based detection for plates and vehicles
-- OCR via Groq Vision (Meta Llama 4 Scout) or PaddleOCR
-- Vehicle color classification (EfficientNet family model)
-- Flask web dashboard with login/admin + Socket.IO notifications
-- Watchlists and automatic alerts on matches
-- Analytics (detections by hour/day, color/type breakdown)
-- PostgreSQL persistence and usage tracking of Groq API
+Tech: Python • OpenCV • Ultralytics YOLO • TensorFlow/Keras • Groq Vision OCR / PaddleOCR • Flask + Socket.IO • PostgreSQL
 
 ---
 
-## 🏗️ Architecture
+## 🌟 Project Overview
 
-High-level data flow:
+This system detects Nigerian vehicle license plates, extracts the plate text, enriches detections with vehicle type, color, and (optionally) car brand, and persists results in PostgreSQL. It includes a full-featured Flask admin web app to upload images, manage watchlists, receive real-time alerts, view analytics, and run live camera capture with auto-detection.
+
+Core modules:
+- Main ANPR: `src/anpr_image.py` (image pipeline; Groq Vision OCR + car-brand)
+- Flask App: `src/web_app.py` (admin UI, uploads, live camera, auto-detection, alerts, analytics)
+- Video (optional): `src/anpr.py` (video pipeline; PaddleOCR)
+- Config: `config/appconfig.py` (env vars, logging bootstrap)
+
+---
+
+## 🚀 Key Features
+
+Detection & OCR
+- YOLOv8-based plate detection (`models/license_plate_detector.pt`)
+- YOLOv8-nano vehicle detection for context (`models/yolov8n.pt`)
+- OCR (Images): Groq Vision (Meta Llama 4 Scout) with 8-char Nigerian plate regex
+- OCR (Video): PaddleOCR with a 6+ alphanumeric acceptance to handle noise
+
+Enrichment
+- Vehicle color classifier (`models/EFN-model.best.h5`)
+- Vehicle type (car/motorcycle/bus/truck) via YOLO
+- Optional car brand/model inference using Groq Vision
+
+Admin Web App (Flask + Socket.IO)
+- Secure login (user/admin), CSRF protection
+- Image uploads (admin) → annotated frames + cropped plates
+- Live camera preview/capture and auto-detection loop with cooldown
+- Real-time alerts to admins on watchlist matches
+- Analytics dashboards (by type/color, day/hour, etc.)
+
+Storage & Ops
+- PostgreSQL persistence and connection pooling
+- Auto table creation for: `detected_plates`, `watchlists`, `watchlist_entries`, `alerts`, `groq_api_usage`
+- Structured logs to `logs/` (config/web)
+
+---
+
+## 🏗️ System Architecture
+
+Flow
 1) Source: image upload, video file, or live camera
-2) Detection: YOLOv8 for plates; YOLOv8-nano for vehicles
-3) OCR: Groq Vision (primary) or PaddleOCR (video pipeline)
-4) Enrichment: vehicle color (TensorFlow) + car brand (Groq Vision)
-5) Storage: PostgreSQL tables (detected_plates, watchlists, alerts, groq_api_usage)
-6) Dashboard: Flask + Socket.IO for admin UI, alerts, analytics
+2) Detect: YOLO plates + YOLO vehicles
+3) OCR: Groq Vision (image) or PaddleOCR (video)
+4) Enrich: color, type, optional brand
+5) Persist: PostgreSQL
+6) Notify: Socket.IO alerts for watchlist matches
+7) Analyze: admin dashboards
 
-Main components:
-- Detection models: `models/license_plate_detector.pt`, `models/yolov8n.pt`, `models/yolov8m-seg.pt`
-- Color classifier: `models/EFN-model.best.h5`
-- Image pipeline: `src/anpr_image.py` (Groq Vision OCR + brand)
-- Video pipeline: `src/anpr.py` (PaddleOCR OCR)
-- Web app (admin): `src/web_app.py` (uploads, live camera, alerts, analytics)
-- Config: `config/appconfig.py` (env vars, logging)
-
----
-
-## ✨ Features
-
-- License plate detection and OCR (Nigeria-centric formats)
-- Vehicle detection (type) and color classification
-- Car brand/model inference via Groq Vision (best-effort)
-- Image uploads and batch processing
-- Live camera preview and on-demand capture
-- Auto-detection loop on live stream with cooldown
-- Watchlists and alerting (with Socket.IO push to admins)
-- Detection analytics and Groq usage metrics
-- Secure login, admin role, CSRF protection
-- Annotated image/video output and cropped plate images
+Key files
+- `src/anpr_image.py` → primary ANPR pipeline for images (Groq OCR, brand)
+- `src/web_app.py` → Flask app, admin UI, Socket.IO, camera, auto-detect, analytics
+- `src/anpr.py` → optional video pipeline (PaddleOCR-based)
+- `config/appconfig.py` → env loading + early logging
 
 ---
 
-## 📂 Project Structure (selected)
+## 📂 Repository Structure (essential)
 
 ```
 ANPR System/
-├── config/
-│   └── appconfig.py                 # Env loading, logging
-├── models/                          # YOLO + color model weights
-├── src/
-│   ├── anpr.py                      # Video pipeline (YOLO + PaddleOCR)
-│   ├── anpr_image.py                # Image pipeline (YOLO + Groq Vision)
-│   ├── web_app.py                   # Flask app + Socket.IO + admin
-│   ├── templates/                   # Jinja HTML templates
-│   └── static/                      # JS/CSS/assets
-├── db/                              # SQL and local DBs (if any)
-├── output/                          # Annotated videos
-├── output_plates/
-│   └── plate_images/                # Cropped plate images
-├── logs/                            # config.log, web.log, ...
-├── README.md
-└── requirements.txt
+├─ config/
+│  └─ appconfig.py
+├─ models/
+│  ├─ license_plate_detector.pt
+│  ├─ yolov8n.pt
+│  ├─ yolov8m-seg.pt
+│  └─ EFN-model.best.h5
+├─ src/
+│  ├─ anpr_image.py      # MAIN ANPR (images, Groq OCR + brand)
+│  ├─ web_app.py         # Flask admin app
+│  ├─ anpr.py            # Optional video pipeline
+│  ├─ templates/         # Jinja templates
+│  └─ static/            # JS/CSS
+├─ output/               # Annotated videos
+├─ output_plates/
+│  └─ plate_images/      # Cropped plate images saved by app
+├─ logs/                 # config.log, web.log, ...
+└─ requirements.txt
 ```
 
 ---
 
-## 🧰 Tech Stack
+## ✅ Prerequisites
 
-- Python 3.10+ (recommended 3.11)
-- Flask, Flask-Login, Flask-WTF, Flask-SocketIO (eventlet)
-- OpenCV, Ultralytics YOLOv8
-- TensorFlow/Keras (vehicle color)
-- PaddleOCR (video OCR) and/or Groq Vision OCR (image OCR)
-- PostgreSQL (psycopg2-binary)
+- Python 3.10+ (3.11 recommended)
+- PostgreSQL 12+
+- Windows (PowerShell examples below). Linux/macOS work similarly.
+- Optional GPU for faster YOLO/TF inference (CPU works too).
 
 ---
 
 ## 🔐 Configuration
 
-Create a `.env` file in the project root with:
+Create `.env` at project root:
 
 ```
 DB_HOST=localhost
@@ -111,45 +119,43 @@ FLASK_SECRET_KEY=replace_this_in_production
 ADMIN_PASSWORD=strong_admin_password
 ```
 
-Notes:
-- `config/appconfig.py` enforces presence of the DB and API keys listed there.
-- On first run of the web app, an admin user with username `admin` is created/updated using `ADMIN_PASSWORD`.
+Notes
+- `config/appconfig.py` validates required vars; missing ones stop the app.
+- On first web run, user `admin` is created/updated with `ADMIN_PASSWORD`.
 
 ---
 
-## 🛠️ Setup
-
-Windows PowerShell examples:
+## 🛠️ Setup (Windows PowerShell)
 
 ```
 # 1) Clone
 git clone https://github.com/Abdulraqib20/anpr-system-development.git
 cd anpr-system-development
 
-# 2) Python venv
+# 2) Virtual env
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
 # 3) Install deps
 pip install --upgrade pip
 pip install -r requirements.txt
-# If using PaddleOCR (video OCR)
+# Optional: for video OCR pipeline
 pip install paddleocr
 ```
 
-Database:
-- Ensure PostgreSQL is running and accessible with the credentials in `.env`.
-- Tables are auto-created by the app (detected_plates, watchlists, watchlist_entries, alerts, groq_api_usage).
-
-Models:
-- Place model weights in `models/` (already referenced in code):
-  - `license_plate_detector.pt`
-  - `yolov8n.pt` (vehicles), `yolov8m-seg.pt` (optional)
+Models
+- Ensure the following weights exist under `models/` (present in this repo or place your own):
+  - `license_plate_detector.pt` (plates)
+  - `yolov8n.pt` (vehicles) and optionally `yolov8m-seg.pt`
   - `EFN-model.best.h5` (vehicle color)
+
+Database
+- Start PostgreSQL and ensure credentials in `.env` are correct.
+- Tables are created automatically by the app if missing.
 
 ---
 
-## 🚀 Run the Web App
+## ▶️ Run the Admin Web App
 
 ```
 # From project root
@@ -157,61 +163,78 @@ python -m src.web_app
 ```
 
 - URL: http://127.0.0.1:8080
-- Login with `admin` and the `ADMIN_PASSWORD` you set in `.env`.
+- Login with username `admin` and your `ADMIN_PASSWORD`.
 
-Core pages and features:
-- Dashboard with detections, gallery, and stats
-- Upload images (admin only): processes with image pipeline (Groq OCR)
-- Live camera preview and capture (admin)
-- Auto-detection on live stream (admin)
-- Watchlists and alerts (admin)
-- Analytics and Groq usage metrics (admin)
+Highlights
+- Upload images (admin) → stored annotated frame + cropped plate(s)
+- Live camera: preview and single-frame capture
+- Auto-detection: background vehicle detection + ANPR on frames (cooldown)
+- Watchlists: create lists, add plates, automatic alerting on match
+- Analytics: detections by day/hour, by vehicle type/color; Groq usage metrics
 
-Files saved:
+Saved files
 - Annotated frames: `output_plates/`
 - Cropped plates: `output_plates/plate_images/`
 
 ---
 
-## 📸 CLI Usage (Image/Video)
+## 📸 CLI: Main ANPR (Images)
 
-Image(s) with Groq OCR and brand detection:
+`src/anpr_image.py` (Groq Vision OCR + car brand)
+
 ```
-# One or more image paths
+# One or more image files
 python -m src.anpr_image --source Resources/example1.jpg Resources/example2.jpg
 ```
 
-Video with PaddleOCR (and vehicle type/color):
+Behavior
+- Detects plates and vehicles; runs Groq OCR (8-char strict Nigerian regex)
+- Predicts vehicle color; attempts brand/model via Groq
+- Saves cropped plates to `output_plates/plate_images/`
+- Saves annotated frame to `output_plates/`
+- Persists results to PostgreSQL and checks watchlists to raise alerts
+
+---
+
+## 🎞️ CLI: Optional Video Pipeline
+
+`src/anpr.py` (PaddleOCR-based OCR tuned for noisier video)
+
 ```
-# Custom video file
+# Process a video file
 python src/anpr.py --source "Resources/car_vid.mp4"
 
-# Webcam
+# Or open a webcam
 python src/anpr.py --source 0
 ```
 
-Output videos are saved under `output/` with timestamps.
+Behavior
+- YOLOv8 plate detection (+ vehicle type); OCR with PaddleOCR
+- Adaptive frame skipping and time limits for throughput
+- Saves annotated video to `output/`
+- Persists plates (when valid) to PostgreSQL
 
 ---
 
-## 🔎 API Endpoints (selected)
+## 🔎 HTTP API (selected)
 
 - GET `/api/detections` → All detections (JSON)
-- Image/plate files:
+- Images
   - GET `/output_images/<filename>` → annotated frames (gallery)
   - GET `/plate_images/<filename>` → cropped plate images
-- Camera (admin):
-  - POST `/api/camera/start` | `/api/camera/stop` | `/api/camera/capture` | GET `/api/camera/preview`
+- Camera (admin)
+  - POST `/api/camera/start` | `/api/camera/stop`
+  - POST `/api/camera/capture` | GET `/api/camera/preview`
   - GET `/api/camera/status` | GET `/api/camera/available` | POST `/api/camera/test-ip`
-- Auto-detection (admin):
+- Auto-detection (admin)
   - POST `/api/auto-detection/start` | `/api/auto-detection/stop`
   - GET `/api/auto-detection/status` | POST `/api/auto-detection/settings` | POST `/api/auto-detection/test`
 
-All admin routes require login + admin role.
+All admin endpoints require login (admin role).
 
 ---
 
-## 🗄️ Database Schema (summary)
+## 📊 Database Schema (summary)
 
 - `detected_plates(id, start_time, end_time, license_plate, confidence, detection_count, vehicle_type, vehicle_color, car_brand, time_of_day, day_of_week, image_filename, annotated_frame_filename)`
 - `watchlists(id, name, description, created_at, is_active)`
@@ -223,63 +246,52 @@ Tables are created on startup if missing.
 
 ---
 
-## 🔧 Configuration Details
+## ⚙️ Configuration & Behavior Notes
 
-- Env + logging initialized in `config/appconfig.py` → logs under `logs/` (e.g., `config.log`, `web.log`).
-- Plate format:
-  - Image pipeline (`anpr_image.py`): strict 8-char regex (`^[A-Z0-9]{8}$`) with correction heuristics.
-  - Video pipeline (`anpr.py`): accepts 6+ alphanumeric to accommodate noisier OCR.
-- Vehicle color classes: `['beige','black','blue','brown','gold','green','grey','orange','pink','purple','red','silver','tan','white','yellow']`.
-
----
-
-## 📈 Analytics & Alerts
-
-- Alerts are generated automatically when a detected plate matches an active watchlist entry.
-- Real-time admin notifications are sent via Socket.IO (`new_alert`).
-- Analytics pages show breakdowns by vehicle type/color, detections per day/hour, and day-of-week.
-- Groq usage metrics page summarizes token usage and recent calls.
+- Env + logging bootstrap: `config/appconfig.py` → logs go to `logs/` (e.g., `config.log`, `web.log`).
+- Plate regex
+  - Images: strict 8-char `^[A-Z0-9]{8}$` with correction heuristics for common OCR confusions.
+  - Video: accepts `^[A-Z0-9]{6,}$` to tolerate video noise.
+- Vehicle color classes: `beige, black, blue, brown, gold, green, grey, orange, pink, purple, red, silver, tan, white, yellow`.
+- Connection pooling: PostgreSQL via `psycopg2.pool.SimpleConnectionPool`.
+- Real-time: Socket.IO emits alerts to `admins_room`.
 
 ---
 
-## 🧪 Tips & Troubleshooting
+## 🧪 Troubleshooting
 
-- Missing env vars → check `.env` and console/logs.
-- DB connection errors → verify PostgreSQL host/port/credentials, and that the service is running.
-- PaddleOCR not installed (video OCR) → `pip install paddleocr`.
-- Model files missing → place weights in `models/` per paths hardcoded in the code.
-- Eventlet/WebSocket issues → ensure eventlet is installed and avoid multiple reloader processes.
-- Windows camera access → try `--source 0`, ensure no other app is using the camera.
+- Env vars missing → verify `.env` and console/logs.
+- PostgreSQL errors → check host/port/credentials; ensure DB is running and reachable.
+- PaddleOCR not installed (video) → `pip install paddleocr`.
+- Model files missing → put weights in `models/` with names used in code.
+- Eventlet/WebSocket issues → ensure `eventlet` installed; run with `use_reloader=False` (already set).
+- Windows camera in-use → close other apps; try `--source 0` for default webcam.
 
 ---
 
-## 🗺️ Roadmap (suggested)
+## 🗺️ Roadmap
 
-- Improve plate OCR robustness for video (multi-preprocess ensemble)
-- Deployable Docker Compose for app + DB
-- Role-based features beyond admin/user
-- Advanced analytics dashboards
-- Model training scripts and documentation
+- Video OCR ensemble and plate tracking for higher recall/precision
+- Docker Compose for app + DB + optional GPU support
+- Expanded RBAC, audit logging, and multi-tenant support
+- Advanced analytics dashboards and exports
+- Training and fine-tuning guides for models
 
 ---
 
 ## 🤝 Contributing
 
-- Fork → Branch → PR. Keep changes small and documented.
-- Follow Python lint/format standards (black/isort/flake8) if available.
+- Fork → branch → PR; keep changes scoped and documented.
+- Follow standard Python formatting/linting (black/isort/flake8) if configured.
 
 ---
 
 ## 📜 License
 
-No explicit license file is present. All rights reserved by the author(s). If you need a license, add a `LICENSE` file and update this section.
+No explicit license is included. Add a `LICENSE` file to specify terms if needed.
 
 ---
 
 ## 🙏 Acknowledgements
 
-- Ultralytics YOLO
-- PaddleOCR
-- TensorFlow/Keras
-- Groq (Meta Llama 4 Scout vision OCR)
-- Flask + Flask-SocketIO
+Ultralytics YOLO • PaddleOCR • TensorFlow/Keras • Groq (Meta Llama 4 Scout Vision) • Flask + Flask-Socket.IO
