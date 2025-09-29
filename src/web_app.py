@@ -209,7 +209,7 @@ class AutoDetectionManager:
         """Check if plate is duplicate using both session memory and database"""
         # DUPLICATE DETECTION DISABLED - ALWAYS RETURN FALSE TO ALLOW ALL DETECTIONS
         if not self.duplicate_detection_enabled:
-            logger.info(f"🔓 Duplicate detection DISABLED - allowing plate: {plate_text}")
+            logger.info(f"Duplicate detection disabled - allowing plate: {plate_text}")
             return False
 
         try:
@@ -366,14 +366,14 @@ class AutoDetectionManager:
                     self.anpr_processor.save_to_database(unique_detections, annotated_frame_filename=annotated_filename)
                     auto_detection_stats['plates_processed'] += len(unique_detections)
                     save_success = True
-                    logger.info(f"✅ Auto-detection: Successfully saved {len(unique_detections)} new detections to database")
+                    logger.info(f"Auto-detection: Successfully saved {len(unique_detections)} new detection(s) to database")
 
                     # Emit successful detection to clients
                     if self.socketio:
                         self.socketio.emit('anpr_detection', detection_results, room='admins_room')
 
                 except Exception as e:
-                    logger.error(f"❌ CRITICAL: Error saving auto-detections to database: {e}")
+                    logger.error(f"CRITICAL: Error saving auto-detections to database: {e}")
                     logger.error(f"Failed detection data: {unique_detections}")
                     # Remove from session cache since save failed
                     self._remove_failed_plates_from_session([det.get('license_plate', '') for det in unique_detections])
@@ -2591,7 +2591,7 @@ def force_reset_detection():
             auto_detection_manager.processed_vehicles.clear()
             auto_detection_manager.session_plates.clear()
 
-            logger.info("✅ Detection manager reset completed")
+            logger.info("Detection manager reset completed")
 
         # Reset global stats
         global auto_detection_stats
