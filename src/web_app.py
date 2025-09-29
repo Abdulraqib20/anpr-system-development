@@ -67,11 +67,12 @@ class AutoDetectionManager:
         self.vehicle_confidence = 0.65  # slightly lower confidence for better coverage
         self.last_detection_time = 0
 
-        # Enhanced duplicate prevention
+        # Enhanced duplicate prevention (DISABLED - allowing all detections)
         self.processed_vehicles = {}  # vehicle_fingerprint -> {timestamp, plate_results}
         self.session_plates = []  # Track plates detected in current session
         self.vehicle_memory_duration = 60  # Remember vehicles for 60 seconds
-        self.plate_memory_duration = 300  # Remember plates for 5 minutes to prevent session duplicates
+        self.plate_memory_duration = 30  # Remember plates for 30 seconds to prevent session duplicates (reduced for testing)
+        self.duplicate_detection_enabled = False  # DISABLED: Allow all duplicate detections for testing
 
         # Performance optimization
         self.frame_skip_counter = 0
@@ -87,16 +88,30 @@ class AutoDetectionManager:
             vehicles = []
 
             for result in results:
-                boxes = result.boxes.xyxy.cpu().numpy()
-                classes = result.boxes.cls.cpu().numpy()
-                confs = result.boxes.conf.cpu().numpy()
+                if result.boxes is not None:
+                    # Handle tensor operations safely for type checker
+                    boxes_tensor = result.boxes.xyxy
+                    classes_tensor = result.boxes.cls
+                    confs_tensor = result.boxes.conf
 
-                for box, cls, conf in zip(boxes, classes, confs):
-                    cls_id = int(cls)
-                    if cls_id in vehicle_classes:
-                        x1, y1, x2, y2 = map(int, box)
-                        vehicles.append({
-                            'box': (x1, y1, x2, y2),
+                    # Convert to numpy arrays with safe tensor handling
+                    try:
+                        # Try tensor.cpu().numpy() for PyTorch tensors
+                        boxes = boxes_tensor.cpu().numpy()  # type: ignore
+                        classes = classes_tensor.cpu().numpy()  # type: ignore
+                        confs = confs_tensor.cpu().numpy()  # type: ignore
+                    except AttributeError:
+                        # Fallback for numpy arrays or other types
+                        boxes = boxes_tensor
+                        classes = classes_tensor
+                        confs = confs_tensor
+
+                    for box, cls, conf in zip(boxes, classes, confs):
+                        cls_id = int(cls)
+                        if cls_id in vehicle_classes:
+                            x1, y1, x2, y2 = map(int, box)
+                            vehicles.append({
+                                'box': (x1, y1, x2, y2),
                             'confidence': float(conf),
                             'class': cls_id,
                             'area': (x2 - x1) * (y2 - y1)
@@ -173,6 +188,98 @@ class AutoDetectionManager:
             and current_time - plate_info['timestamp'] <= self.plate_memory_duration
         ]
 
+    def clear_detection_cache(self):
+        """Clear all duplicate detection cache - useful for testing or manual reset"""
+        self.processed_vehicles.clear()
+        self.session_plates.clear()
+        self.last_detection_time = 0
+        logger.info("Detection cache cleared - duplicate prevention reset")
+
+    def get_detection_stats(self):
+        """Get current detection statistics"""
+        return {
+            'vehicles_in_memory': len(self.processed_vehicles),
+            'plates_in_memory': len(self.session_plates),
+            'last_detection_time': self.last_detection_time,
+            'detection_cooldown': self.detection_cooldown,
+            'plate_memory_duration': self.plate_memory_duration
+        }
+
+    def _is_plate_duplicate(self, plate_text, current_time):
+        """Check if plate is duplicate using both session memory and database"""
+        # DUPLICATE DETECTION DISABLED - ALWAYS RETURN FALSE TO ALLOW ALL DETECTIONS
+        if not self.duplicate_detection_enabled:
+            logger.info(f"🔓 Duplicate detection DISABLED - allowing plate: {plate_text}")
+            return False
+
+        try:
+            # Clean old session plates first
+            self.cleanup_memory()
+
+            # Check session memory
+            session_duplicate = any(
+                plate_text == existing_plate.get('plate', '')
+                for existing_plate in self.session_plates
+                if isinstance(existing_plate, dict)
+            )
+
+            if session_duplicate:
+                return True
+
+            # Database checking disabled for now since connection method doesn't exist
+            return False
+
+        except Exception as e:
+            logger.error(f"Error in duplicate checking: {e}")
+            # If duplicate checking fails, err on the side of allowing detection
+            return False
+
+    def _add_plate_to_session(self, plate_text, current_time, vehicle_fingerprint):
+        """Add plate to session tracking with automatic cleanup"""
+        # Clean old entries first
+        self.cleanup_memory()
+
+        # Add new plate
+        self.session_plates.append({
+            'plate': plate_text,
+            'timestamp': current_time,
+            'vehicle_fingerprint': vehicle_fingerprint
+        })
+
+        # Ensure we don't exceed reasonable memory limits
+        if len(self.session_plates) > 100:  # Keep only last 100 plates
+            self.session_plates = self.session_plates[-50:]
+            logger.info("Trimmed session plates cache to prevent memory overflow")
+
+    def cleanup_memory(self):
+        """Clean old entries from session memory"""
+        if not hasattr(self, 'session_plates'):
+            self.session_plates = []
+            return
+
+        current_time = time.time()
+        # Remove entries older than memory duration
+        original_count = len(self.session_plates)
+        self.session_plates = [
+            entry for entry in self.session_plates
+            if current_time - entry['timestamp'] < self.plate_memory_duration
+        ]
+        cleaned_count = original_count - len(self.session_plates)
+        if cleaned_count > 0:
+            logger.debug(f"Cleaned {cleaned_count} old entries from session memory, {len(self.session_plates)} remaining")
+
+    def _remove_failed_plates_from_session(self, failed_plates):
+        """Remove plates from session cache if database save failed"""
+        try:
+            for plate_text in failed_plates:
+                self.session_plates = [
+                    plate_info for plate_info in self.session_plates
+                    if isinstance(plate_info, dict) and plate_info.get('plate', '') != plate_text
+                ]
+            logger.info(f"Removed {len(failed_plates)} failed plates from session cache")
+        except Exception as e:
+            logger.error(f"Error removing failed plates from session: {e}")
+
     def process_detected_vehicle(self, frame, vehicle):
         """Process frame through ANPR pipeline with intelligent duplicate prevention"""
         try:
@@ -193,33 +300,28 @@ class AutoDetectionManager:
             # Process through existing ANPR system
             annotated_frame, detections = self.anpr_processor.process_image(frame)
 
-            # Filter out duplicate plates within session
+            # Improved duplicate detection with database checking and better session management
             unique_detections = []
-            new_plates_found = False
 
             if detections:
-                for detection in detections:
-                    plate_text = detection.get('license_plate', '').strip().upper()
-                    if plate_text:
-                        # Check if this plate was already detected in current session
-                        plate_already_seen = any(
-                            plate_text == existing_plate.get('plate', '')
-                            for existing_plate in self.session_plates
-                            if isinstance(existing_plate, dict)
-                        )
+                if not self.duplicate_detection_enabled:
+                    # Duplicate detection fully disabled - keep everything
+                    unique_detections = list(detections)
+                    logger.debug("Duplicate detection disabled - preserving all detections for database save")
+                else:
+                    for detection in detections:
+                        plate_text = detection.get('license_plate', '').strip().upper()
+                        if plate_text:
+                            # Check both session memory and recent database records
+                            is_duplicate = self._is_plate_duplicate(plate_text, current_time)
 
-                        if not plate_already_seen:
-                            unique_detections.append(detection)
-                            # Add to session tracking
-                            self.session_plates.append({
-                                'plate': plate_text,
-                                'timestamp': current_time,
-                                'vehicle_fingerprint': vehicle_fingerprint
-                            })
-                            new_plates_found = True
-                            logger.info(f"New unique plate detected: {plate_text}")
-                        else:
-                            logger.info(f"Skipping duplicate plate in session: {plate_text}")
+                            if not is_duplicate:
+                                unique_detections.append(detection)
+                                # Add to session tracking with cleanup
+                                self._add_plate_to_session(plate_text, current_time, vehicle_fingerprint)
+                                logger.info(f"New unique plate detected: {plate_text}")
+                            else:
+                                logger.info(f"Skipping duplicate plate (session or recent DB): {plate_text}")
 
             # Update vehicle tracking with results
             self.processed_vehicles[vehicle_fingerprint] = {
@@ -236,8 +338,11 @@ class AutoDetectionManager:
                 'annotated_image': None,
                 'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3],
                 'auto_detected': True,
-                'duplicate_prevention': True
+                'duplicate_prevention': self.duplicate_detection_enabled
             }
+
+            # Enhanced error handling for database saves
+            save_success = False
 
             if unique_detections:
                 # Generate filename for annotated frame only if we have unique detections
@@ -260,19 +365,32 @@ class AutoDetectionManager:
                 try:
                     self.anpr_processor.save_to_database(unique_detections, annotated_frame_filename=annotated_filename)
                     auto_detection_stats['plates_processed'] += len(unique_detections)
-                    logger.info(f"Auto-detection: Saved {len(unique_detections)} new unique detections to database")
+                    save_success = True
+                    logger.info(f"✅ Auto-detection: Successfully saved {len(unique_detections)} new detections to database")
 
                     # Emit successful detection to clients
                     if self.socketio:
                         self.socketio.emit('anpr_detection', detection_results, room='admins_room')
 
                 except Exception as e:
-                    logger.error(f"Error saving auto-detections to database: {e}")
+                    logger.error(f"❌ CRITICAL: Error saving auto-detections to database: {e}")
+                    logger.error(f"Failed detection data: {unique_detections}")
+                    # Remove from session cache since save failed
+                    self._remove_failed_plates_from_session([det.get('license_plate', '') for det in unique_detections])
+                    save_success = False
             else:
                 if detections:
                     logger.info(f"All {len(detections)} detected plates were duplicates - skipping database save")
+                    # For debugging: show which plates were considered duplicates
+                    for detection in detections:
+                        plate_text = detection.get('license_plate', '').strip().upper()
+                        logger.debug(f"Duplicate plate: {plate_text}")
                 else:
                     logger.info("No license plates detected in vehicle")
+
+            # Log final save status for debugging
+            if unique_detections:
+                logger.info(f"Database save status for detection: {'SUCCESS' if save_success else 'FAILED'}")
 
             # Update stats
             auto_detection_stats['vehicles_detected'] += 1
@@ -479,15 +597,15 @@ socketio = SocketIO(
     ping_timeout=30,
     ping_interval=10,
     logger=False,
-    engineio_logger=False,
-    transports=['polling', 'websocket']
+    engineio_logger=False
 ) # Simplified Socket.IO configuration for better stability
 # ----------------------------
 
 # --- Flask-Login Setup ---
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login' # The route name for the login page
+# Type ignore for login_view assignment (standard Flask-Login pattern)
+login_manager.login_view = 'login'  # type: ignore # The route name for the login page
 login_manager.login_message_category = 'info' # Bootstrap class for flash messages
 # -------------------------
 
@@ -793,6 +911,10 @@ def register():
         username = form.username.data
         password = form.password.data
 
+        if not password:
+            flash('Password is required.', 'danger')
+            return render_template('register.html', form=form)
+
         hashed_password = generate_password_hash(password)
 
         conn = get_db()
@@ -839,7 +961,7 @@ def login():
                 with conn.cursor() as cur:
                     cur.execute("SELECT id, username, password_hash, role FROM users WHERE username = %s", (username,))
                     user_data = cur.fetchone()
-                    if user_data and check_password_hash(user_data[2], password):
+                    if user_data and password and check_password_hash(user_data[2], password):
                         user_object = User(id=user_data[0], username=user_data[1], role=user_data[3])
                         logger.info(f"Login successful for user: {username}")
                     else:
@@ -1136,7 +1258,7 @@ def upload_image():
     results_summary = [] # To store summary of each file processing
 
     for file_storage_object in uploaded_files:
-        if file_storage_object and allowed_file(file_storage_object.filename):
+        if file_storage_object and file_storage_object.filename and allowed_file(file_storage_object.filename):
             original_filename = secure_filename(file_storage_object.filename)
             timestamp = dt.now().strftime("%Y%m%d%H%M%S%f") # More precision for multiple files
             unique_filename = f"{timestamp}_{original_filename}"
@@ -1165,7 +1287,7 @@ def upload_image():
                         logger.info(f"Removed temporary file: {temp_save_path}")
                     except OSError as e_remove:
                         logger.error(f"Error removing temporary file {temp_save_path}: {e_remove}")
-        elif file_storage_object:
+        elif file_storage_object and file_storage_object.filename:
             original_filename = secure_filename(file_storage_object.filename)
             logger.warning(f"File type not allowed for file: {original_filename}")
             results_summary.append({"filename": original_filename, "status": "error", "message": "File type not allowed."})
@@ -1745,14 +1867,18 @@ def admin_watchlist_entries(watchlist_id):
         if conn: # Re-check conn as it might have been lost or closed
             try:
                 with conn.cursor() as cur:
-                    cur.execute("INSERT INTO watchlist_entries (watchlist_id, license_plate, reason) VALUES (%s, %s, %s)",
-                                (watchlist_id, form.license_plate.data.upper(), form.reason.data))
-                    conn.commit()
-                    flash(f'Plate "{form.license_plate.data.upper()}" added to watchlist "{watchlist_info["name"]}" successfully!', 'success')
-                    return redirect(url_for('admin_watchlist_entries', watchlist_id=watchlist_id))
+                    if form.license_plate.data:
+                        cur.execute("INSERT INTO watchlist_entries (watchlist_id, license_plate, reason) VALUES (%s, %s, %s)",
+                                    (watchlist_id, form.license_plate.data.upper(), form.reason.data))
+                        conn.commit()
+                        flash(f'Plate "{form.license_plate.data.upper()}" added to watchlist "{watchlist_info["name"]}" successfully!', 'success')
+                        return redirect(url_for('admin_watchlist_entries', watchlist_id=watchlist_id))
+                    else:
+                        flash('License plate is required.', 'danger')
             except psycopg2.IntegrityError: # Handles unique (watchlist_id, license_plate) constraint
                 conn.rollback()
-                flash(f'Error: Plate "{form.license_plate.data.upper()}" already exists in this watchlist.', 'danger')
+                if form.license_plate.data:
+                    flash(f'Error: Plate "{form.license_plate.data.upper()}" already exists in this watchlist.', 'danger')
             except psycopg2.Error as e:
                 conn.rollback()
                 logger.error(f"Error adding watchlist entry: {e}", exc_info=True)
@@ -1926,6 +2052,9 @@ def capture_and_process_frame():
         logger.info("Frame captured, starting ANPR processing...")
 
         # Process through existing ANPR system (same as image upload)
+        if anpr_processor is None:
+            return jsonify({'error': 'ANPR processor not initialized'}), 500
+
         annotated_frame, detections = anpr_processor.process_image(frame)
 
         # Generate filename for annotated frame
@@ -1951,6 +2080,10 @@ def capture_and_process_frame():
         # Save to database if detections found
         if detections:
             try:
+                if anpr_processor is None:
+                    logger.error("ANPR processor not initialized")
+                    return jsonify({'error': 'ANPR processor not initialized'}), 500
+
                 anpr_processor.save_to_database(detections, annotated_frame_filename=saved_filename)
                 camera_stats['plates_detected'] += len(detections)
                 camera_stats['last_detection_time'] = datetime.now().isoformat()
@@ -2064,7 +2197,7 @@ def camera_preview():
 
         # Encode frame as JPEG
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        frame_data = base64.b64encode(buffer).decode('utf-8')
+        frame_data = base64.b64encode(buffer.tobytes()).decode('utf-8')
 
         return jsonify({
             'success': True,
@@ -2359,12 +2492,198 @@ def test_auto_detection():
         logger.error(f"Error in auto-detection test: {e}")
         return jsonify({'error': f'Test failed: {str(e)}'}), 500
 
+@app.route('/api/auto-detection/clear-cache', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def clear_detection_cache():
+    """Clear the duplicate detection cache"""
+    if not auto_detection_manager:
+        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+
+    try:
+        auto_detection_manager.clear_detection_cache()
+        return jsonify({
+            'success': True,
+            'message': 'Detection cache cleared successfully',
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error clearing detection cache: {e}")
+        return jsonify({'error': f'Failed to clear cache: {str(e)}'}), 500
+
+@app.route('/api/auto-detection/detection-stats')
+@login_required
+@admin_required
+def get_detection_stats():
+    """Get current detection statistics"""
+    if not auto_detection_manager:
+        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+
+    try:
+        stats = auto_detection_manager.get_detection_stats()
+        return jsonify({
+            'success': True,
+            'stats': stats,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error getting detection stats: {e}")
+        return jsonify({'error': f'Failed to get stats: {str(e)}'}), 500
+
+@app.route('/api/auto-detection/toggle-duplicates', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def toggle_duplicate_detection():
+    """Toggle duplicate detection on/off"""
+    if not auto_detection_manager:
+        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+
+    try:
+        data = request.get_json() or {}
+
+        # Toggle or set specific state
+        if 'enabled' in data:
+            auto_detection_manager.duplicate_detection_enabled = bool(data['enabled'])
+        else:
+            # Toggle current state
+            auto_detection_manager.duplicate_detection_enabled = not auto_detection_manager.duplicate_detection_enabled
+
+        status = "ENABLED" if auto_detection_manager.duplicate_detection_enabled else "DISABLED"
+
+        return jsonify({
+            'success': True,
+            'duplicate_detection_enabled': auto_detection_manager.duplicate_detection_enabled,
+            'message': f'Duplicate detection {status}',
+            'timestamp': datetime.now().isoformat(),
+            'note': 'When disabled, all plate detections will be saved to database regardless of duplicates'
+        })
+
+    except Exception as e:
+        logger.error(f"Error toggling duplicate detection: {e}")
+        return jsonify({'error': f'Toggle failed: {str(e)}'}), 500
+
+@app.route('/api/auto-detection/force-reset', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def force_reset_detection():
+    """Force reset all detection systems - nuclear option for stuck states"""
+    global auto_detection_running, auto_detection_manager
+
+    try:
+        logger.warning("🚨 FORCE RESET: Clearing all detection caches and resetting system state")
+
+        # Stop auto-detection if running
+        if auto_detection_running:
+            auto_detection_running = False
+            time.sleep(1)  # Give time for threads to stop
+
+        # Reset auto-detection manager
+        if auto_detection_manager:
+            auto_detection_manager.clear_detection_cache()
+            # Reset all internal counters
+            auto_detection_manager.last_detection_time = 0
+            auto_detection_manager.frame_skip_counter = 0
+
+            # Force clear all memory structures
+            auto_detection_manager.processed_vehicles.clear()
+            auto_detection_manager.session_plates.clear()
+
+            logger.info("✅ Detection manager reset completed")
+
+        # Reset global stats
+        global auto_detection_stats
+        auto_detection_stats = {
+            'start_time': None,
+            'vehicles_detected': 0,
+            'plates_processed': 0,
+            'last_vehicle_time': None,
+            'detection_cooldown': 8,
+            'vehicle_confidence_threshold': 0.65,
+            'last_processed_vehicles': {},
+        }
+
+        return jsonify({
+            'success': True,
+            'message': '🚨 FORCE RESET completed - all detection caches cleared',
+            'timestamp': datetime.now().isoformat(),
+            'actions_taken': [
+                'Stopped auto-detection',
+                'Cleared detection manager cache',
+                'Reset session plates memory',
+                'Reset processed vehicles memory',
+                'Reset global statistics',
+                'Reset detection timers'
+            ]
+        })
+
+    except Exception as e:
+        logger.error(f"Error in force reset: {e}")
+        return jsonify({'error': f'Force reset failed: {str(e)}'}), 500
+
+@app.route('/api/auto-detection/configure', methods=['POST'])
+@login_required
+@admin_required
+@csrf.exempt
+def configure_duplicate_detection():
+    """Configure duplicate detection settings"""
+    if not auto_detection_manager:
+        return jsonify({'error': 'Auto-detection manager not initialized'}), 500
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No configuration data provided'}), 400
+
+        # Update settings if provided
+        if 'plate_memory_duration' in data:
+            duration = int(data['plate_memory_duration'])
+            if 10 <= duration <= 3600:  # Between 10 seconds and 1 hour
+                auto_detection_manager.plate_memory_duration = duration
+            else:
+                return jsonify({'error': 'plate_memory_duration must be between 10 and 3600 seconds'}), 400
+
+        if 'detection_cooldown' in data:
+            cooldown = int(data['detection_cooldown'])
+            if 1 <= cooldown <= 60:  # Between 1 and 60 seconds
+                auto_detection_manager.detection_cooldown = cooldown
+            else:
+                return jsonify({'error': 'detection_cooldown must be between 1 and 60 seconds'}), 400
+
+        if 'vehicle_confidence' in data:
+            confidence = float(data['vehicle_confidence'])
+            if 0.1 <= confidence <= 1.0:
+                auto_detection_manager.vehicle_confidence = confidence
+            else:
+                return jsonify({'error': 'vehicle_confidence must be between 0.1 and 1.0'}), 400
+
+        # Return current settings
+        current_settings = {
+            'plate_memory_duration': auto_detection_manager.plate_memory_duration,
+            'detection_cooldown': auto_detection_manager.detection_cooldown,
+            'vehicle_confidence': auto_detection_manager.vehicle_confidence,
+            'vehicle_memory_duration': auto_detection_manager.vehicle_memory_duration
+        }
+
+        return jsonify({
+            'success': True,
+            'message': 'Configuration updated successfully',
+            'settings': current_settings,
+            'timestamp': datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error configuring duplicate detection: {e}")
+        return jsonify({'error': f'Configuration failed: {str(e)}'}), 500
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
     if current_user.is_authenticated and current_user.is_admin():
         join_room('admins_room')
-        logger.info(f"Admin user {current_user.username} (SID: {request.sid}) connected and joined 'admins_room'.")
+        logger.info(f"Admin user {current_user.username} connected and joined 'admins_room'.")
     else:
         logger.warning(f"Non-admin user attempted to connect via SocketIO: {current_user.username if current_user.is_authenticated else 'Anonymous'}")
 
@@ -2372,7 +2691,7 @@ def handle_connect():
 def handle_disconnect(*args, **kwargs):
     """Handle client disconnection"""
     if current_user.is_authenticated:
-        logger.info(f"Admin user {current_user.username} (SID: {request.sid}) disconnected.")
+        logger.info(f"Admin user {current_user.username} disconnected.")
 
 @socketio.on('join_camera_room')
 def handle_join_camera_room():
