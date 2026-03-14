@@ -49,6 +49,8 @@ json
 output
 *.mp4
 *.sql
+Resources/
+output_plates/
 
 # OS specific
 .DS_Store
@@ -67,3 +69,4 @@ src/templates/admin/admin_usage_metrics copy.html
 # others
 .cursor/
 .kiro/
+.github/
