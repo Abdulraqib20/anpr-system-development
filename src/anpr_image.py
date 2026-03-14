@@ -26,6 +26,11 @@ import warnings
 warnings.filterwarnings('ignore')
 warnings.simplefilter(action='ignore')
 
+try:
+    from ollama import Client as OllamaClient
+except Exception:
+    OllamaClient = None
+
 load_dotenv()
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -37,7 +42,12 @@ from config.appconfig import (
     DB_USER,
     DB_PASSWORD,
     DB_PORT,
-    GROQ_API_KEY
+    OCR_PROVIDER,
+    OCR_FALLBACK_TO_GROQ,
+    OLLAMA_HOST,
+    OLLAMA_MODEL,
+    GROQ_MODEL_NAME,
+    GROQ_API_KEY,
 )
 
 logs_dir = Path(__file__).parent.parent / "logs"
@@ -81,7 +91,6 @@ PLATE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 VEHICLE_MODEL_PATH = "models/yolov8n.pt"
 VEHICLE_COLOR_MODEL_PATH = "models/EFN-model.best.h5"
 MODEL_PATH="models/license_plate_detector.pt"
-GROQ_MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct" # "llama-3.2-90b-vision-preview" # llama-3.2-11b-vision-preview
 
 PLATE_REGEX = re.compile(r'^[A-Z0-9]{8}$')  # Strict 8-character Nigerian format
 MIN_CONFIDENCE=0.45
@@ -205,18 +214,15 @@ class ANPRProcessor:
         self.model = YOLO(MODEL_PATH)
         self.socketio = socketio_instance # Store the SocketIO instance
 
-        # --- Groq Initialization ---
-        if not GROQ_API_KEY:
-            logger.error("GROQ_API_KEY not found in environment/config.")
-            raise ValueError("GROQ_API_KEY is required for OCR.")
-        try:
-            self.groq_client = Groq(api_key=GROQ_API_KEY)
-            self.groq_model_name = GROQ_MODEL_NAME
-            logger.info(f"Groq client initialized with model: {self.groq_model_name}")
-        except Exception as e:
-            logger.error(f"Failed to initialize Groq client: {e}", exc_info=True)
-            raise RuntimeError(f"Failed to initialize Groq client: {e}") from e
-        # ---------------------------
+        # OCR provider setup
+        self.ocr_provider = OCR_PROVIDER
+        self.ocr_fallback_to_groq = OCR_FALLBACK_TO_GROQ
+        self.ollama_host = OLLAMA_HOST
+        self.ollama_model_name = OLLAMA_MODEL
+        self.groq_model_name = GROQ_MODEL_NAME
+        self.ollama_client = None
+        self.groq_client = None
+        self._initialize_ocr_clients()
 
         # Track globally saved plates for the entire processing session
         self.saved_plates = set()  # Keep this for preventing duplicate DB entries across runs/calls
@@ -240,7 +246,48 @@ class ANPRProcessor:
         self._ensure_table_exists()
         # --- Ensure Database Table Exists --- End
 
-        logger.info("ANPRProcessor initialized for image processing with Meta's Llama 4 Scout multi-modal model.")
+        logger.info(
+            "ANPRProcessor initialized with OCR provider=%s, ollama_model=%s, groq_model=%s, fallback_to_groq=%s",
+            self.ocr_provider,
+            self.ollama_model_name,
+            self.groq_model_name,
+            self.ocr_fallback_to_groq,
+        )
+
+    def _initialize_ocr_clients(self):
+        """Initialize configured OCR provider clients."""
+        errors = []
+
+        if self.ocr_provider == 'ollama':
+            if OllamaClient is None:
+                errors.append("Ollama Python client is not available. Install package 'ollama'.")
+            else:
+                try:
+                    self.ollama_client = OllamaClient(host=self.ollama_host)
+                    logger.info("Ollama client initialized at %s with model %s", self.ollama_host, self.ollama_model_name)
+                except Exception as e:
+                    errors.append(f"Failed to initialize Ollama client: {e}")
+
+        if self.ocr_provider == 'groq' or self.ocr_fallback_to_groq:
+            if not GROQ_API_KEY:
+                errors.append("GROQ_API_KEY is missing while Groq is required by provider/fallback settings.")
+            else:
+                try:
+                    self.groq_client = Groq(api_key=GROQ_API_KEY)
+                    logger.info("Groq client initialized with model: %s", self.groq_model_name)
+                except Exception as e:
+                    errors.append(f"Failed to initialize Groq client: {e}")
+
+        if self.ocr_provider == 'ollama' and self.ollama_client:
+            return
+        if self.ocr_provider == 'groq' and self.groq_client:
+            return
+        if self.ocr_provider == 'ollama' and self.ocr_fallback_to_groq and self.groq_client:
+            logger.warning("Ollama unavailable at startup, Groq fallback is active.")
+            return
+
+        details = "; ".join(errors) if errors else "No provider could be initialized."
+        raise RuntimeError(f"OCR provider initialization failed: {details}")
 
     #----------------------------------------------------------------------------------------------
     # Helper: Ensure Database Table Exists
@@ -289,13 +336,14 @@ class ANPRProcessor:
                 else:
                     logger.debug("Column 'car_brand' already exists in 'detected_plates'.")
 
-                # --- Define and create groq_api_usage table --- Start
+                # --- Define and create usage table --- Start
                 create_usage_table_sql = """
                 CREATE TABLE IF NOT EXISTS groq_api_usage (
                     id SERIAL PRIMARY KEY,
                     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    provider VARCHAR(20) NOT NULL DEFAULT 'groq', -- e.g., 'ollama' or 'groq'
                     api_call_type VARCHAR(50) NOT NULL,       -- e.g., 'plate_ocr', 'brand_detection'
-                    model_name VARCHAR(100) NOT NULL,         -- e.g., GROQ_MODEL_NAME
+                    model_name VARCHAR(100) NOT NULL,         -- e.g., selected provider model
                     prompt_tokens INTEGER,
                     completion_tokens INTEGER,
                     total_tokens INTEGER,
@@ -306,7 +354,20 @@ class ANPRProcessor:
                 cursor.execute(create_usage_table_sql)
                 conn.commit()
                 logger.info("Table 'groq_api_usage' checked/created successfully.")
-                # --- Define and create groq_api_usage table --- End
+
+                cursor.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name='groq_api_usage' AND column_name='provider';
+                """)
+                if not cursor.fetchone():
+                    logger.info("Column 'provider' not found in 'groq_api_usage', attempting to add it.")
+                    cursor.execute("ALTER TABLE groq_api_usage ADD COLUMN provider VARCHAR(20) NOT NULL DEFAULT 'groq';")
+                    conn.commit()
+                    logger.info("Successfully ADDED 'provider' column to 'groq_api_usage'.")
+                else:
+                    logger.debug("Column 'provider' already exists in 'groq_api_usage'.")
+                # --- Define and create usage table --- End
 
         except Exception as e:
             logger.error(f"Database error during table creation (detected_plates or groq_api_usage): {e}", exc_info=True)
@@ -317,32 +378,52 @@ class ANPRProcessor:
                 self.db_pool.putconn(conn)
 
     #----------------------------------------------------------------------------------------------
-    # Helper: Log Groq API Usage to Database
+    # Helper: Log LLM API Usage to Database
     #----------------------------------------------------------------------------------------------
-    def _log_groq_usage_to_db(self, call_type, model_name, usage_stats, related_detection_id=None):
-        """Logs Groq API token usage to the groq_api_usage table."""
+    def _log_api_usage_to_db(self, call_type, provider, model_name, usage_stats, related_detection_id=None):
+        """Logs LLM API usage stats to the groq_api_usage table."""
         conn = None
         try:
+            prompt_tokens = None
+            completion_tokens = None
+            total_tokens = None
+
+            if isinstance(usage_stats, dict):
+                prompt_tokens = usage_stats.get('prompt_tokens')
+                completion_tokens = usage_stats.get('completion_tokens')
+                total_tokens = usage_stats.get('total_tokens')
+            elif usage_stats is not None:
+                prompt_tokens = getattr(usage_stats, 'prompt_tokens', None)
+                completion_tokens = getattr(usage_stats, 'completion_tokens', None)
+                total_tokens = getattr(usage_stats, 'total_tokens', None)
+
             conn = self.db_pool.getconn()
             with conn.cursor() as cursor:
                 sql_insert = """
                     INSERT INTO groq_api_usage
-                    (api_call_type, model_name, prompt_tokens, completion_tokens, total_tokens, related_detection_id)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (provider, api_call_type, model_name, prompt_tokens, completion_tokens, total_tokens, related_detection_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """
                 record = (
+                    provider,
                     call_type,
                     model_name,
-                    usage_stats.prompt_tokens if usage_stats else None,
-                    usage_stats.completion_tokens if usage_stats else None,
-                    usage_stats.total_tokens if usage_stats else None,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
                     related_detection_id
                 )
                 cursor.execute(sql_insert, record)
                 conn.commit()
-                logger.debug(f"Logged Groq API usage: Type={call_type}, Model={model_name}, Tokens={usage_stats.total_tokens if usage_stats else 'N/A'}")
+                logger.debug(
+                    "Logged API usage: Provider=%s, Type=%s, Model=%s, Tokens=%s",
+                    provider,
+                    call_type,
+                    model_name,
+                    total_tokens if total_tokens is not None else 'N/A'
+                )
         except Exception as e:
-            logger.error(f"Failed to log Groq API usage to DB: {e}", exc_info=True)
+            logger.error(f"Failed to log API usage to DB: {e}", exc_info=True)
             if conn:
                 conn.rollback()
         finally:
@@ -506,22 +587,107 @@ class ANPRProcessor:
         return cleaned
 
     #----------------------------------------------------------------------------------------------
-    # Helper: Process Plate with Meta's Llama 4 Scout multi-modal model
+    # Helper: Encode image for provider calls
+    #----------------------------------------------------------------------------------------------
+    def _encode_image_to_base64(self, image, quality=95):
+        """Encode OpenCV image to base64 JPEG string."""
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+        is_success, buffer = cv2.imencode(".jpg", image, encode_param)
+        if not is_success:
+            return None
+        return base64.b64encode(buffer.tobytes()).decode('utf-8')
+
+    def _extract_ollama_usage(self, response):
+        """Normalize Ollama usage values to the DB logging shape."""
+        if not isinstance(response, dict):
+            return None
+
+        prompt_tokens = response.get('prompt_eval_count')
+        completion_tokens = response.get('eval_count')
+        total_tokens = None
+        if prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+
+        return {
+            'prompt_tokens': prompt_tokens,
+            'completion_tokens': completion_tokens,
+            'total_tokens': total_tokens,
+        }
+
+    def _get_provider_attempt_order(self):
+        """Return provider attempt order, appending Groq fallback when configured."""
+        providers = [self.ocr_provider]
+        if self.ocr_provider == 'ollama' and self.ocr_fallback_to_groq and self.groq_client:
+            providers.append('groq')
+        return providers
+
+    #----------------------------------------------------------------------------------------------
+    # Helper: Process Plate with Ollama
+    #----------------------------------------------------------------------------------------------
+    def _process_plate_with_ollama(self, plate_image, related_detection_id=None):
+        """Encodes plate image and calls Ollama model for OCR."""
+        if not self.ollama_client:
+            logger.warning("Ollama client not initialized; skipping Ollama plate OCR.")
+            return ""
+
+        try:
+            image_base64 = self._encode_image_to_base64(plate_image, quality=95)
+            if not image_base64:
+                logger.error("Failed to encode plate image to JPEG for Ollama.")
+                return ""
+
+            logger.debug(
+                "Sending image (approx %s base64 chars) to Ollama model for PLATE OCR: %s",
+                len(image_base64),
+                self.ollama_model_name,
+            )
+
+            response = self.ollama_client.chat(
+                model=self.ollama_model_name,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': "Analyze the license plate image. Extract ONLY the 8 alphanumeric characters (A-Z, 0-9) representing the plate number. Output MUST be exactly 8 characters long and in ALL UPPERCASE. Remove any hyphens, spaces, or symbols. Respond with ONLY the 8-character plate string (e.g., ABC123XY). NO other text, explanation, or formatting.",
+                        'images': [image_base64],
+                    }
+                ],
+                options={'temperature': 0},
+            )
+
+            usage_stats = self._extract_ollama_usage(response)
+            self._log_api_usage_to_db('plate_ocr', 'ollama', self.ollama_model_name, usage_stats, related_detection_id)
+
+            raw_ocr_result = response.get('message', {}).get('content', '')
+            cleaned_result = self._clean_plate_text(raw_ocr_result)
+            logger.info("Ollama raw result for PLATE: '%s', Cleaned result: '%s'", raw_ocr_result, cleaned_result)
+            return cleaned_result
+
+        except Exception as e:
+            logger.error(f"Error processing PLATE with Ollama: {str(e)}", exc_info=True)
+            return ""
+
+    #----------------------------------------------------------------------------------------------
+    # Helper: Process Plate with Groq
     #----------------------------------------------------------------------------------------------
     def _process_plate_with_groq(self, plate_image, related_detection_id=None):
-        """Encodes plate image and calls Groq Vision API for OCR."""
+        """Encodes plate image and calls Groq model for OCR."""
+        if not self.groq_client:
+            logger.warning("Groq client not initialized; skipping Groq plate OCR.")
+            return ""
+
         try:
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 95]
-            is_success, buffer = cv2.imencode(".jpg", plate_image, encode_param)
-            if not is_success:
+            image_base64 = self._encode_image_to_base64(plate_image, quality=95)
+            if not image_base64:
                 logger.error("Failed to encode plate image to JPEG for Groq.")
                 return ""
 
-            image_bytes = buffer.tobytes()
-            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
             image_media_type = 'image/jpeg'
 
-            logger.debug(f"Sending image (approx {len(image_base64)} base64 chars) to Groq model for PLATE OCR: {self.groq_model_name}")
+            logger.debug(
+                "Sending image (approx %s base64 chars) to Groq model for PLATE OCR: %s",
+                len(image_base64),
+                self.groq_model_name,
+            )
 
             chat_completion = self.groq_client.chat.completions.create(
                 messages=[
@@ -545,37 +711,95 @@ class ANPRProcessor:
                 max_tokens=30,
             )
 
-            # Log usage
             if hasattr(chat_completion, 'usage') and chat_completion.usage:
-                self._log_groq_usage_to_db('plate_ocr', self.groq_model_name, chat_completion.usage, related_detection_id)
+                self._log_api_usage_to_db('plate_ocr', 'groq', self.groq_model_name, chat_completion.usage, related_detection_id)
             else:
                 logger.warning("Groq chat_completion response did not include usage statistics for plate_ocr.")
 
             raw_ocr_result = chat_completion.choices[0].message.content
             cleaned_result = self._clean_plate_text(raw_ocr_result)
-            logger.info(f"Groq raw result for PLATE: '{raw_ocr_result}', Cleaned result: '{cleaned_result}'")
+            logger.info("Groq raw result for PLATE: '%s', Cleaned result: '%s'", raw_ocr_result, cleaned_result)
             return cleaned_result
 
         except Exception as e:
-            logger.error(f"Error processing PLATE with Groq Vision API: {str(e)}", exc_info=True)
-            # Optionally log a failed API call attempt here if needed, though without token counts
-            # self._log_groq_usage_to_db('plate_ocr_failed', self.groq_model_name, None, related_detection_id)
+            logger.error(f"Error processing PLATE with Groq: {str(e)}", exc_info=True)
             return ""
+
+    def _process_plate_with_provider(self, plate_image, related_detection_id=None):
+        """Run plate OCR with selected provider and optional fallback."""
+        for provider in self._get_provider_attempt_order():
+            if provider == 'ollama':
+                result = self._process_plate_with_ollama(plate_image, related_detection_id)
+            elif provider == 'groq':
+                result = self._process_plate_with_groq(plate_image, related_detection_id)
+            else:
+                logger.error("Unsupported OCR provider configured: %s", provider)
+                continue
+
+            if result:
+                if provider != self.ocr_provider:
+                    logger.warning("OCR fallback provider used for plate OCR: %s", provider)
+                return result
+
+        return ""
+
+    #----------------------------------------------------------------------------------------------
+    # Helper: Detect Car Brand with Ollama
+    #----------------------------------------------------------------------------------------------
+    def _detect_car_brand_with_ollama(self, image_to_process, related_detection_id=None):
+        """Encodes an image and calls Ollama model to detect car brand and model."""
+        if not self.ollama_client:
+            logger.warning("Ollama client not initialized; skipping Ollama car brand detection.")
+            return "Unknown"
+
+        try:
+            image_base64 = self._encode_image_to_base64(image_to_process, quality=90)
+            if not image_base64:
+                logger.error("Failed to encode image to JPEG for Ollama car brand detection.")
+                return "Unknown"
+
+            response = self.ollama_client.chat(
+                model=self.ollama_model_name,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': "Analyze this image and determine the exact brand/make of the car (e.g., Toyota, Honda, Ford, BMW, etc.). Be as specific as possible by identifying both the make and model if visible (e.g., Toyota Camry, Honda Civic, BMW 3 Series). Provide ONLY the car brand/make and model in your response with no additional text or explanations. If unknown, respond 'Unknown'.",
+                        'images': [image_base64],
+                    }
+                ],
+                options={'temperature': 0},
+            )
+
+            usage_stats = self._extract_ollama_usage(response)
+            self._log_api_usage_to_db('brand_detection', 'ollama', self.ollama_model_name, usage_stats, related_detection_id)
+
+            brand_result = response.get('message', {}).get('content', '').strip()
+            if not brand_result or len(brand_result) > 100:
+                logger.warning("Ollama car brand detection returned unusual result: '%s'. Defaulting to Unknown.", brand_result)
+                return "Unknown"
+
+            logger.info("Ollama car brand detection result: '%s'", brand_result)
+            return brand_result
+
+        except Exception as e:
+            logger.error(f"Error detecting car brand with Ollama: {str(e)}", exc_info=True)
+            return "Unknown"
 
     #----------------------------------------------------------------------------------------------
     # Helper: Detect Car Brand with Groq
     #----------------------------------------------------------------------------------------------
     def _detect_car_brand_with_groq(self, image_to_process, related_detection_id=None):
-        """Encodes an image and calls Groq Vision API to detect car brand and model."""
+        """Encodes an image and calls Groq model to detect car brand and model."""
+        if not self.groq_client:
+            logger.warning("Groq client not initialized; skipping Groq car brand detection.")
+            return "Unknown"
+
         try:
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-            is_success, buffer = cv2.imencode(".jpg", image_to_process, encode_param)
-            if not is_success:
+            image_base64 = self._encode_image_to_base64(image_to_process, quality=90)
+            if not image_base64:
                 logger.error("Failed to encode image to JPEG for Groq car brand detection.")
                 return "Unknown"
 
-            image_bytes = buffer.tobytes()
-            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
             image_media_type = 'image/jpeg'
 
             logger.debug(f"Sending image for CAR BRAND detection to Groq model: {self.groq_model_name}")
@@ -605,9 +829,8 @@ class ANPRProcessor:
                 max_tokens=50
             )
 
-            # Log usage
             if hasattr(chat_completion, 'usage') and chat_completion.usage:
-                self._log_groq_usage_to_db('brand_detection', self.groq_model_name, chat_completion.usage, related_detection_id)
+                self._log_api_usage_to_db('brand_detection', 'groq', self.groq_model_name, chat_completion.usage, related_detection_id)
             else:
                 logger.warning("Groq chat_completion response did not include usage statistics for brand_detection.")
 
@@ -620,69 +843,83 @@ class ANPRProcessor:
             return brand_result
 
         except Exception as e:
-            logger.error(f"Error detecting car brand with Groq Vision API: {str(e)}", exc_info=True)
-            # self._log_groq_usage_to_db('brand_detection_failed', self.groq_model_name, None, related_detection_id)
+            logger.error(f"Error detecting car brand with Groq: {str(e)}", exc_info=True)
             return "Unknown"
+
+    def _detect_car_brand_with_provider(self, image_to_process, related_detection_id=None):
+        """Run car brand detection with selected provider and optional fallback."""
+        for provider in self._get_provider_attempt_order():
+            if provider == 'ollama':
+                result = self._detect_car_brand_with_ollama(image_to_process, related_detection_id)
+            elif provider == 'groq':
+                result = self._detect_car_brand_with_groq(image_to_process, related_detection_id)
+            else:
+                logger.error("Unsupported OCR provider configured for brand detection: %s", provider)
+                continue
+
+            if result and result != 'Unknown':
+                if provider != self.ocr_provider:
+                    logger.warning("OCR fallback provider used for brand detection: %s", provider)
+                return result
+
+        return "Unknown"
 
     #----------------------------------------------------------------------------------------------
     # OCR License Plate
     #----------------------------------------------------------------------------------------------
     def ocr_license_plate(self, image, related_detection_id=None):
-        """Perform OCR on license plate image using Groq Vision."""
+        """Perform OCR on license plate image using the configured provider."""
         try:
-            logger.debug("Sending original cropped plate image to Groq OCR.")
+            logger.debug("Sending original cropped plate image to OCR provider=%s.", self.ocr_provider)
             image_to_ocr = image
 
-            # Call Groq helper, passing related_detection_id if available
-            cleaned_plate = self._process_plate_with_groq(image_to_ocr, related_detection_id)
+            cleaned_plate = self._process_plate_with_provider(image_to_ocr, related_detection_id)
 
             if not cleaned_plate:
-                logger.warning("Groq OCR did not return a valid plate string.")
+                logger.warning("OCR provider did not return a valid plate string.")
                 return "", 0.0
 
-            # Apply regex validation and correction heuristic directly to Groq's cleaned output
             if PLATE_REGEX.fullmatch(cleaned_plate):
-                logger.info(f"Valid plate format found via Groq: '{cleaned_plate}'")
-                # Return with default high confidence
+                logger.info("Valid plate format found via provider OCR: '%s'", cleaned_plate)
                 return cleaned_plate, GROQ_CONFIDENCE
             else:
-                logger.warning(f"Groq result '{cleaned_plate}' ({len(cleaned_plate)} chars) does not match PLATE_REGEX {PLATE_REGEX.pattern}. Attempting correction...")
+                logger.warning(
+                    "OCR result '%s' (%s chars) does not match PLATE_REGEX %s. Attempting correction...",
+                    cleaned_plate,
+                    len(cleaned_plate),
+                    PLATE_REGEX.pattern,
+                )
 
-                # --- Post-OCR Correction Heuristic (Length 7 -> 8) ---
                 corrected_plate = None
                 if len(cleaned_plate) == 7:
-                    # Simple substitution map
                     correction_map = {
                         '0': ['O', 'D'], '1': ['I', 'L', 'T'], '2': ['Z'],
                         '5': ['S'], '8': ['B'], '9': ['P', 'N']
-                        # Add Letter -> Digit if needed
                     }
                     last_char = cleaned_plate[-1]
                     possible_corrections = correction_map.get(last_char, [])
 
                     if possible_corrections:
-                        logger.debug(f"Attempting corrections for Groq result last char '{last_char}': {possible_corrections}")
+                        logger.debug("Attempting corrections for OCR result last char '%s': %s", last_char, possible_corrections)
                         base = cleaned_plate[:-1]
                         for replacement in possible_corrections:
                             potential_plate = base + replacement
-                            logger.debug(f"Testing Groq correction: '{potential_plate}' against regex: '{PLATE_REGEX.pattern}'")
+                            logger.debug("Testing OCR correction: '%s' against regex '%s'", potential_plate, PLATE_REGEX.pattern)
                             if PLATE_REGEX.fullmatch(potential_plate):
                                 corrected_plate = potential_plate
-                                logger.info(f"Groq Correction successful: '{cleaned_plate}' -> '{corrected_plate}'")
-                                break # Take the first successful correction
+                                logger.info("OCR correction successful: '%s' -> '%s'", cleaned_plate, corrected_plate)
+                                break
                     else:
-                        logger.debug(f"No predefined corrections found for Groq result last char '{last_char}'.")
+                        logger.debug("No predefined corrections found for OCR result last char '%s'.", last_char)
 
                 if corrected_plate:
-                    # Return corrected plate with the default confidence
                     return corrected_plate, GROQ_CONFIDENCE
-                else:
-                    logger.warning(f"Correction failed for Groq result '{cleaned_plate}'. Discarding.")
-                    return "", 0.0 # Return empty if regex doesn't match and correction fails
+
+                logger.warning("Correction failed for OCR result '%s'. Discarding.", cleaned_plate)
+                return "", 0.0
 
         except Exception as e:
-            # Catch errors specific to the OCR step (beyond the API call itself)
-            logger.error(f"Groq OCR processing step error: {str(e)}", exc_info=True)
+            logger.error(f"OCR processing step error: {str(e)}", exc_info=True)
             return "", 0.0
 
     #---------------------------------------------------------------------------------------------
@@ -944,7 +1181,7 @@ class ANPRProcessor:
                 logger.info("No vehicles detected, using full frame for car brand detection.")
 
             if image_for_brand_detection.size > 0:
-                car_brand_overall = self._detect_car_brand_with_groq(image_for_brand_detection, None)
+                car_brand_overall = self._detect_car_brand_with_provider(image_for_brand_detection, None)
             else:
                 logger.warning("Image for brand detection is empty.")
 

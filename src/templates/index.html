@@ -9,53 +9,71 @@
     .clickable-row {
         cursor: pointer;
     }
+
     .clickable-row:hover {
-        background-color: rgba(0, 0, 0, 0.075); /* Subtle hover effect */
+        background-color: rgba(0, 0, 0, 0.075);
+        /* Subtle hover effect */
     }
+
     /* Ensure modal images fit nicely */
     #detectionDetailModal .modal-body img {
         max-width: 100%;
         height: auto;
-        margin-bottom: 1rem; /* Space below image */
+        margin-bottom: 1rem;
+        /* Space below image */
     }
+
     /* Sorting indicator styles */
     .sortable {
         cursor: pointer;
         position: relative;
     }
+
     .sortable::after {
-        content: '\2195'; /* Up-Down Arrow */
+        content: '\2195';
+        /* Up-Down Arrow */
         position: absolute;
         right: 8px;
         opacity: 0.3;
     }
+
     .sortable.asc::after {
-        content: '\2191'; /* Up Arrow */
+        content: '\2191';
+        /* Up Arrow */
         opacity: 1;
     }
+
     .sortable.desc::after {
-        content: '\2193'; /* Down Arrow */
+        content: '\2193';
+        /* Down Arrow */
         opacity: 1;
     }
+
     /* Hide elements during JS loading/processing */
     .js-hide-until-load {
-        display: none !important; /* Use !important to ensure override */
+        display: none !important;
+        /* Use !important to ensure override */
     }
+
     #loadingIndicator {
         text-align: center;
         padding: 2rem;
         font-style: italic;
         color: #6c757d;
     }
+
     #tableErrorPlaceholder {
-         margin-top: 1rem;
+        margin-top: 1rem;
     }
+
     /* Upload progress styles */
     #uploadProgress {
         transition: height 0.3s ease-in-out;
     }
+
     #uploadProgress .progress {
-        height: 10px; /* Smaller progress bar */
+        height: 10px;
+        /* Smaller progress bar */
     }
 </style>
 {% endblock %}
@@ -72,7 +90,8 @@
         <form id="uploadForm" enctype="multipart/form-data">
             <div class="mb-3">
                 <label for="imageFile" class="form-label">Select Image File(s) (JPEG, PNG, BMP):</label>
-                <input class="form-control" type="file" id="imageFile" name="imageFile" accept=".jpg, .jpeg, .png, .bmp" required multiple>
+                <input class="form-control" type="file" id="imageFile" name="imageFile" accept=".jpg, .jpeg, .png, .bmp"
+                    required multiple>
             </div>
             <button type="submit" id="uploadButton" class="btn btn-primary">
                 <i class="bi bi-cloud-arrow-up-fill"></i> Upload & Process Selected
@@ -83,11 +102,12 @@
         </form>
         <div id="uploadProgress" class="mt-3" style="height: 0; overflow: hidden;">
             <div class="progress">
-                <div id="uploadProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                <div id="uploadProgressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                    role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
             </div>
             <div id="uploadStatus" class="text-center mt-2 small text-muted"></div>
         </div>
-         <div id="uploadResult" class="mt-3 alert" style="display: none;" role="alert"></div>
+        <div id="uploadResult" class="mt-3 alert" style="display: none;" role="alert"></div>
     </div>
 </div>
 <!-- End Image Upload Section -->
@@ -100,7 +120,8 @@
             <div class="card-header">Total Detections</div>
             <div class="card-body d-flex align-items-center justify-content-center">
                 {# The total count will be updated by JS after full data load #}
-                <h5 class="card-title display-4 mb-0"><i class="bi bi-database-check me-2"></i> <span id="totalDetectionsStat">...</span></h5>
+                <h5 class="card-title display-4 mb-0"><i class="bi bi-database-check me-2"></i> <span
+                        id="totalDetectionsStat">...</span></h5>
             </div>
         </div>
     </div>
@@ -108,8 +129,10 @@
         <div class="card text-center h-100">
             <div class="card-header">Detections Today</div>
             <div class="card-body d-flex align-items-center justify-content-center">
-                 {# Add an ID to the span for JS updates #}
-                 <h5 class="card-title display-4 mb-0"><i class="bi bi-calendar-check me-2"></i> <span id="todayDetectionsStat">{{ stats.today_detections if stats.today_detections is not none else 'N/A' }}</span></h5>
+                {# Add an ID to the span for JS updates #}
+                <h5 class="card-title display-4 mb-0"><i class="bi bi-calendar-check me-2"></i> <span
+                        id="todayDetectionsStat">{{ stats.today_detections if stats.today_detections is not none else
+                        'N/A' }}</span></h5>
             </div>
         </div>
     </div>
@@ -122,7 +145,7 @@
         <!-- Search Filter Input - No longer a form -->
         <div class="col-md-4">
             <input type="text" id="plateSearchInput" class="form-control form-control-sm"
-                   placeholder="Filter by license plate..." value="{{ search_query | default('', true) }}">
+                placeholder="Filter by license plate..." value="{{ search_query | default('', true) }}">
         </div>
     </div>
     <div class="card-body">
@@ -156,7 +179,7 @@
                     <option value="Brown">Brown</option>
                     <option value="Beige">Beige</option>
                     <option value="Orange">Orange</option>
-                     <option value="Purple">Purple</option>
+                    <option value="Purple">Purple</option>
                     <option value="Unknown">Unknown</option>
                 </select>
             </div>
@@ -199,12 +222,12 @@
             <div class="spinner-border spinner-border-sm text-primary" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
-             Loading all detections...
+            Loading all detections...
         </div>
 
         {# Error message placeholder #}
         <div id="tableErrorPlaceholder" class="alert alert-danger js-hide-until-load" role="alert">
-             <i class="bi bi-exclamation-triangle-fill me-2"></i> <span id="tableErrorMessage">Error placeholder</span>
+            <i class="bi bi-exclamation-triangle-fill me-2"></i> <span id="tableErrorMessage">Error placeholder</span>
         </div>
 
         {# Table structure - initially hidden #}
@@ -212,17 +235,26 @@
             <table class="table table-striped table-hover align-middle small">
                 <thead class="table-dark">
                     <tr>
-                         {# Use data-column-key matching the keys in the JSON data #}
+                        {# Use data-column-key matching the keys in the JSON data #}
                         <th><i class="bi bi-card-image"></i> Img</th>
-                        <th class="sortable" data-column-key="license_plate" data-column-type="string"><i class="bi bi-person-badge"></i> Plate</th>
-                        <th class="sortable" data-column-key="end_time" data-column-type="datetime"><i class="bi bi-clock-history"></i> Last Seen</th>
-                        <th class="sortable" data-column-key="confidence" data-column-type="number"><i class="bi bi-check-circle"></i> Conf.</th>
-                        <th class="sortable" data-column-key="vehicle_type" data-column-type="string"><i class="bi bi-truck-front"></i> Vehicle</th>
-                        <th class="sortable" data-column-key="vehicle_color" data-column-type="string"><i class="bi bi-palette"></i> Color</th>
-                        <th class="sortable" data-column-key="car_brand" data-column-type="string"><i class="bi bi-award"></i> Brand</th>
-                        <th class="sortable" data-column-key="time_of_day" data-column-type="string"><i class="bi bi-clock"></i> Time</th>
-                        <th class="sortable" data-column-key="day_of_week" data-column-type="string"><i class="bi bi-calendar-week"></i> Day</th>
-                        <th class="sortable" data-column-key="start_time" data-column-type="datetime"><i class="bi bi-clock-history"></i> First Seen</th>
+                        <th class="sortable" data-column-key="license_plate" data-column-type="string"><i
+                                class="bi bi-person-badge"></i> Plate</th>
+                        <th class="sortable" data-column-key="end_time" data-column-type="datetime"><i
+                                class="bi bi-clock-history"></i> Last Seen</th>
+                        <th class="sortable" data-column-key="confidence" data-column-type="number"><i
+                                class="bi bi-check-circle"></i> Conf.</th>
+                        <th class="sortable" data-column-key="vehicle_type" data-column-type="string"><i
+                                class="bi bi-truck-front"></i> Vehicle</th>
+                        <th class="sortable" data-column-key="vehicle_color" data-column-type="string"><i
+                                class="bi bi-palette"></i> Color</th>
+                        <th class="sortable" data-column-key="car_brand" data-column-type="string"><i
+                                class="bi bi-award"></i> Brand</th>
+                        <th class="sortable" data-column-key="time_of_day" data-column-type="string"><i
+                                class="bi bi-clock"></i> Time</th>
+                        <th class="sortable" data-column-key="day_of_week" data-column-type="string"><i
+                                class="bi bi-calendar-week"></i> Day</th>
+                        <th class="sortable" data-column-key="start_time" data-column-type="datetime"><i
+                                class="bi bi-clock-history"></i> First Seen</th>
                         {% if current_user.is_authenticated and current_user.is_admin() %}
                         <th><i class="bi bi-trash3"></i> Actions</th>
                         {% endif %}
@@ -262,41 +294,37 @@
     </div>
     <div class="card-body">
         {% if error and not plate_images %}
-             {# Check if there was an error specifically related to loading images #}
-            {% if "Error loading image gallery" in error %}
-                <div class="alert alert-warning" role="alert">
-                    <i class="bi bi-exclamation-triangle-fill"></i> Could not load plate images. Check logs.
-                </div>
-            {% endif %}
+        {# Check if there was an error specifically related to loading images #}
+        {% if "Error loading image gallery" in error %}
+        <div class="alert alert-warning" role="alert">
+            <i class="bi bi-exclamation-triangle-fill"></i> Could not load plate images. Check logs.
+        </div>
+        {% endif %}
         {% elif plate_images %}
-            <div class="plate-gallery-grid">
-                {% for image in plate_images %}
-                <a href="#"
-                   class="plate-gallery-item"
-                   data-bs-toggle="modal"
-                   data-bs-target="#galleryImageModal"
-                   data-img-src="{{ url_for('serve_output_image', filename=image.filename) }}"
-                   data-img-alt="Annotated Frame: {{ image.filename }}"
-                   data-img-filename="{{ image.filename }}">
-                    <img src="{{ url_for('serve_output_image', filename=image.filename) }}"
-                         alt="Thumbnail: {{ image.filename }}"
-                         loading="lazy">
-                    <div class="plate-gallery-caption">
-                        <code>{{ image.filename }}</code>
-                    </div>
-                </a>
-                {% endfor %}
-            </div>
+        <div class="plate-gallery-grid">
+            {% for image in plate_images %}
+            <a href="#" class="plate-gallery-item" data-bs-toggle="modal" data-bs-target="#galleryImageModal"
+                data-img-src="{{ url_for('serve_output_image', filename=image.filename) }}"
+                data-img-alt="Annotated Frame: {{ image.filename }}" data-img-filename="{{ image.filename }}">
+                <img src="{{ url_for('serve_output_image', filename=image.filename) }}"
+                    alt="Thumbnail: {{ image.filename }}" loading="lazy">
+                <div class="plate-gallery-caption">
+                    <code>{{ image.filename }}</code>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
         {% else %}
-            <div class="alert alert-secondary" role="alert">
-                 <i class="bi bi-info-circle"></i> No plate images found in the output directory yet.
-            </div>
+        <div class="alert alert-secondary" role="alert">
+            <i class="bi bi-info-circle"></i> No plate images found in the output directory yet.
+        </div>
         {% endif %}
     </div> {# End Card Body #}
 </div> {# End Gallery Card #}
 
 <!-- Detection Details Modal (for Table Rows) -->
-<div class="modal fade" id="detectionDetailModal" tabindex="-1" aria-labelledby="detectionDetailModalLabel" aria-hidden="true">
+<div class="modal fade" id="detectionDetailModal" tabindex="-1" aria-labelledby="detectionDetailModalLabel"
+    aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
@@ -320,7 +348,8 @@
                     <li class="list-group-item"><strong>License Plate:</strong> <span id="modalPlateText"></span></li>
                     <li class="list-group-item"><strong>Confidence:</strong> <span id="modalConfidence"></span>%</li>
                     <li class="list-group-item"><strong>Vehicle Type:</strong> <span id="modalVehicleType"></span></li>
-                    <li class="list-group-item"><strong>Vehicle Color:</strong> <span id="modalVehicleColor"></span></li>
+                    <li class="list-group-item"><strong>Vehicle Color:</strong> <span id="modalVehicleColor"></span>
+                    </li>
                     <li class="list-group-item"><strong>Car Brand:</strong> <span id="modalCarBrand"></span></li>
                     <li class="list-group-item"><strong>First Seen:</strong> <span id="modalFirstSeen"></span></li>
                     <li class="list-group-item"><strong>Last Seen:</strong> <span id="modalLastSeen"></span></li>
@@ -336,7 +365,8 @@
 </div>
 
 <!-- Gallery Image Modal -->
-<div class="modal fade" id="galleryImageModal" tabindex="-1" aria-labelledby="galleryImageModalLabel" aria-hidden="true">
+<div class="modal fade" id="galleryImageModal" tabindex="-1" aria-labelledby="galleryImageModalLabel"
+    aria-hidden="true">
     <div class="modal-dialog modal-xl modal-dialog-centered"> {# Use modal-xl for larger images #}
         <div class="modal-content">
             <div class="modal-header">
@@ -363,7 +393,8 @@
     const STATIC_PLACEHOLDER_URL = "{{ url_for('static', filename='images/placeholder.png') }}"; // Add a placeholder image
     const UPLOAD_URL = "{{ url_for('upload_image') }}"; // URL for the upload endpoint
     const API_DETECTIONS_URL = "{{ url_for('api_detections') }}";
-    const current_user_is_admin = {{ current_user.is_authenticated and current_user.is_admin() | tojson }};
+    const PER_FILE_UPLOAD_TIMEOUT_MS = 180000; // 3 minutes per file for local OCR processing
+    const current_user_is_admin = JSON.parse('{{ (current_user.is_authenticated and current_user.is_admin()) | tojson }}');
     const raw_csrf_token_value = "{{ raw_csrf_token if raw_csrf_token else '' }}"; // Get the raw token value
     const detections_delete_url_base = "{{ url_for('index') }}detection/delete/"; // Assumes app root is correct for index
 
@@ -403,6 +434,7 @@
     const uploadStatus = document.getElementById('uploadStatus');
     const uploadResult = document.getElementById('uploadResult');
     let currentXhr = null; // To hold the XMLHttpRequest object for cancellation
+    let currentXhrAbortReason = null;
 
     // --- Utility Functions ---\n
     function formatDate(isoString) {
@@ -444,9 +476,9 @@
     }
 
     function formatTitle(text) {
-         if (text == null || text === '' || text.toLowerCase() === 'unknown') return '-'; // Handle null, empty, or "unknown"
-         // Basic title case
-         return String(text).split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+        if (text == null || text === '' || text.toLowerCase() === 'unknown') return '-'; // Handle null, empty, or "unknown"
+        // Basic title case
+        return String(text).split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
     }
 
     // --- Rendering Functions ---\n
@@ -464,7 +496,7 @@
 
         if (pageData.length === 0) {
             if (allDetections.length > 0) { // Only show if there was data but filter removed it
-                 noDetectionsMessage.classList.remove('js-hide-until-load');
+                noDetectionsMessage.classList.remove('js-hide-until-load');
             }
             return; // Stop if no data for this page
         }
@@ -587,12 +619,12 @@
         }
 
         // Last Page and Ellipsis
-         if (endPage < totalPages) {
+        if (endPage < totalPages) {
             if (endPage < totalPages - 1) {
-                 const ellipsisLi = document.createElement('li');
-                 ellipsisLi.classList.add('page-item', 'disabled');
-                 ellipsisLi.innerHTML = `<span class="page-link">...</span>`;
-                 paginationControls.appendChild(ellipsisLi);
+                const ellipsisLi = document.createElement('li');
+                ellipsisLi.classList.add('page-item', 'disabled');
+                ellipsisLi.innerHTML = `<span class="page-link">...</span>`;
+                paginationControls.appendChild(ellipsisLi);
             }
             const lastLi = document.createElement('li');
             lastLi.classList.add('page-item');
@@ -666,17 +698,17 @@
                 if (type === 'number') {
                     comparison = (parseFloat(valA) || 0) - (parseFloat(valB) || 0);
                 } else if (type === 'datetime') {
-                     // Attempt to parse dates robustly
-                     const timeA = valA ? new Date(valA).getTime() : 0;
-                     const timeB = valB ? new Date(valB).getTime() : 0;
-                     if (isNaN(timeA) && isNaN(timeB)) comparison = 0;
-                     else if (isNaN(timeA)) comparison = isAscending ? -1 : 1; // Invalid dates treated like null
-                     else if (isNaN(timeB)) comparison = isAscending ? 1 : -1;
-                     else comparison = timeA - timeB;
+                    // Attempt to parse dates robustly
+                    const timeA = valA ? new Date(valA).getTime() : 0;
+                    const timeB = valB ? new Date(valB).getTime() : 0;
+                    if (isNaN(timeA) && isNaN(timeB)) comparison = 0;
+                    else if (isNaN(timeA)) comparison = isAscending ? -1 : 1; // Invalid dates treated like null
+                    else if (isNaN(timeB)) comparison = isAscending ? 1 : -1;
+                    else comparison = timeA - timeB;
                 } else { // string comparison (case-insensitive)
                     comparison = String(valA).localeCompare(String(valB), undefined, { sensitivity: 'base' });
                 }
-            } catch(e) {
+            } catch (e) {
                 console.error("Comparison error:", e, "Values:", valA, valB);
                 comparison = 0; // Fallback on error
             }
@@ -716,8 +748,8 @@
     const modalCarBrand = document.getElementById('modalCarBrand');
 
     function attachModalListener(row) {
-         if (!detectionModal || !row) return;
-         row.addEventListener('click', function() {
+        if (!detectionModal || !row) return;
+        row.addEventListener('click', function () {
             // Safely access data attributes
             const plate = this.dataset.plate || 'N/A';
             const plateImage = this.dataset.plateImage || '';
@@ -729,20 +761,20 @@
                 modalPlateImage.src = plateImage || STATIC_PLACEHOLDER_URL;
                 modalPlateImage.alt = plateImage ? `Cropped Plate: ${plate}` : 'No plate image available';
             }
-             if (modalAnnotatedImage) {
-                 modalAnnotatedImage.src = annotatedImage || STATIC_PLACEHOLDER_URL;
-                 modalAnnotatedImage.alt = annotatedImage && annotatedImage !== STATIC_PLACEHOLDER_URL ? `Annotated Frame for ${plate}` : 'No annotated frame available';
+            if (modalAnnotatedImage) {
+                modalAnnotatedImage.src = annotatedImage || STATIC_PLACEHOLDER_URL;
+                modalAnnotatedImage.alt = annotatedImage && annotatedImage !== STATIC_PLACEHOLDER_URL ? `Annotated Frame for ${plate}` : 'No annotated frame available';
             }
 
-            if(modalPlateText) modalPlateText.textContent = plate;
-            if(modalConfidence) modalConfidence.textContent = this.dataset.confidence || 'N/A';
-            if(modalVehicleType) modalVehicleType.textContent = this.dataset.vehicleType || 'N/A';
-            if(modalVehicleColor) modalVehicleColor.textContent = this.dataset.vehicleColor || 'N/A';
-            if(modalFirstSeen) modalFirstSeen.textContent = formatDate(this.dataset.firstSeen) || 'N/A';
-            if(modalLastSeen) modalLastSeen.textContent = formatDate(this.dataset.lastSeen) || 'N/A';
-            if(modalTimeOfDay) modalTimeOfDay.textContent = this.dataset.timeOfDay || 'N/A';
-            if(modalDayOfWeek) modalDayOfWeek.textContent = this.dataset.dayOfWeek || 'N/A';
-            if(modalCarBrand) modalCarBrand.textContent = formatTitle(this.dataset.carBrand) || 'N/A';
+            if (modalPlateText) modalPlateText.textContent = plate;
+            if (modalConfidence) modalConfidence.textContent = this.dataset.confidence || 'N/A';
+            if (modalVehicleType) modalVehicleType.textContent = this.dataset.vehicleType || 'N/A';
+            if (modalVehicleColor) modalVehicleColor.textContent = this.dataset.vehicleColor || 'N/A';
+            if (modalFirstSeen) modalFirstSeen.textContent = formatDate(this.dataset.firstSeen) || 'N/A';
+            if (modalLastSeen) modalLastSeen.textContent = formatDate(this.dataset.lastSeen) || 'N/A';
+            if (modalTimeOfDay) modalTimeOfDay.textContent = this.dataset.timeOfDay || 'N/A';
+            if (modalDayOfWeek) modalDayOfWeek.textContent = this.dataset.dayOfWeek || 'N/A';
+            if (modalCarBrand) modalCarBrand.textContent = formatTitle(this.dataset.carBrand) || 'N/A';
 
             detectionModal.show();
         });
@@ -757,7 +789,7 @@
     if (galleryModalElement && galleryModal) { // Check if modal instance exists
         galleryModalElement.addEventListener('show.bs.modal', function (event) {
             const button = event.relatedTarget; // Element that triggered the modal
-             if (!button) return; // Exit if no trigger element
+            if (!button) return; // Exit if no trigger element
 
             const imgSrc = button.getAttribute('data-img-src');
             const imgAlt = button.getAttribute('data-img-alt');
@@ -810,7 +842,7 @@
                 if (needsRender) {
                     console.log(`Data has changed or initial data loaded. Old count: ${allDetections.length}, New count: ${newDetections.length}. Triggering table update.`);
                     allDetections = newDetections;
-                    if(totalDetectionsStat) totalDetectionsStat.textContent = allDetections.length;
+                    if (totalDetectionsStat) totalDetectionsStat.textContent = allDetections.length;
 
                     if (todayDetectionsStat) {
                         const today = new Date().toISOString().split('T')[0];
@@ -824,7 +856,7 @@
                     }
                     if (filterCarBrand) {
                         const uniqueBrands = [...new Set(allDetections.map(det => det.car_brand).filter(brand => brand && brand.toLowerCase() !== 'unknown'))]
-                                            .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+                            .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
                         const currentFilterValue = filterCarBrand.value;
                         filterCarBrand.innerHTML = '<option value="">All Brands</option>';
                         uniqueBrands.forEach(brand => {
@@ -845,16 +877,16 @@
                     console.log("No significant change in detection data. Table not re-rendered.");
                 }
 
-                if(loadingIndicator) loadingIndicator.style.display = 'none';
-                if(tableContainer) tableContainer.classList.remove('js-hide-until-load');
-                if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
+                if (loadingIndicator) loadingIndicator.style.display = 'none';
+                if (tableContainer) tableContainer.classList.remove('js-hide-until-load');
+                if (tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
             })
             .catch(error => {
                 console.error('Error fetching or processing detections:', error);
-                if(loadingIndicator) loadingIndicator.style.display = 'none';
-                if(tableErrorPlaceholder) {
+                if (loadingIndicator) loadingIndicator.style.display = 'none';
+                if (tableErrorPlaceholder) {
                     tableErrorPlaceholder.classList.remove('js-hide-until-load');
-                    if(tableErrorMessage) tableErrorMessage.textContent = `Failed to fetch detections. Error: ${error.message}`;
+                    if (tableErrorMessage) tableErrorMessage.textContent = `Failed to fetch detections. Error: ${error.message}`;
                 }
                 throw error; // Re-throw to allow chained .catch
             });
@@ -938,7 +970,6 @@
 
         const files = imageFile.files;
         const totalFiles = files.length;
-        const UPLOAD_TIMEOUT_MS = 60000; // 60 seconds timeout per file
 
         uploadButton.disabled = true;
         uploadButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...';
@@ -966,20 +997,21 @@
                 uploadProgressBar.classList.remove('bg-success', 'bg-danger');
                 uploadProgressBar.classList.add('progress-bar-animated'); // Add animated class back
                 uploadProgressBar.textContent = '0%';
-                console.log(`[File ${i+1}/${totalFiles}] Starting processing for: ${file.name}`);
+                console.log(`[File ${i + 1}/${totalFiles}] Starting processing for: ${file.name}`);
 
                 try { // Inner try for each file's promise
                     currentXhr = new XMLHttpRequest();
+                    currentXhrAbortReason = null;
 
                     const responseText = await new Promise((resolve, reject) => {
                         let timeoutId = setTimeout(() => {
-                            console.warn(`[File ${i+1}/${totalFiles}] Upload TIMEOUT for ${file.name} after ${UPLOAD_TIMEOUT_MS}ms. Aborting XHR.`);
+                            console.warn(`[File ${i + 1}/${totalFiles}] Upload TIMEOUT for ${file.name} after ${PER_FILE_UPLOAD_TIMEOUT_MS}ms. Aborting XHR.`);
+                            currentXhrAbortReason = 'timeout';
                             if (currentXhr) {
                                 currentXhr.abort(); // This should trigger onabort
                             }
-                            // Reject is now primarily handled by onabort or onerror for consistency
-                            // reject({ status: 0, statusText: 'Upload timed out', fileName: file.name });
-                        }, UPLOAD_TIMEOUT_MS);
+                            // Reject is handled by onabort/onerror for consistent error paths.
+                        }, PER_FILE_UPLOAD_TIMEOUT_MS);
 
                         currentXhr.upload.onprogress = (e) => {
                             if (e.lengthComputable) {
@@ -987,9 +1019,9 @@
                                 uploadProgressBar.style.width = percentComplete + '%';
                                 uploadProgressBar.textContent = percentComplete + '%';
                                 if (percentComplete < 100) {
-                                    uploadStatus.textContent = `Uploading ${file.name} (${i+1}/${totalFiles}): ${percentComplete}%`;
+                                    uploadStatus.textContent = `Uploading ${file.name} (${i + 1}/${totalFiles}): ${percentComplete}%`;
                                 } else {
-                                    uploadStatus.textContent = `Processing ${file.name} (${i+1}/${totalFiles})... Server is working.`;
+                                    uploadStatus.textContent = `Processing ${file.name} (${i + 1}/${totalFiles})... Server is working.`;
                                     uploadProgressBar.classList.remove('progress-bar-animated');
                                 }
                             }
@@ -997,7 +1029,7 @@
 
                         currentXhr.onload = () => {
                             clearTimeout(timeoutId);
-                            console.log(`[File ${i+1}/${totalFiles}] XHR onload for ${file.name}. Status: ${currentXhr.status}`);
+                            console.log(`[File ${i + 1}/${totalFiles}] XHR onload for ${file.name}. Status: ${currentXhr.status}`);
                             if (currentXhr.status >= 200 && currentXhr.status < 300) {
                                 resolve(currentXhr.responseText);
                             } else {
@@ -1006,28 +1038,32 @@
                         };
                         currentXhr.onerror = () => {
                             clearTimeout(timeoutId);
-                            console.error(`[File ${i+1}/${totalFiles}] XHR onerror for ${file.name}.`);
+                            console.error(`[File ${i + 1}/${totalFiles}] XHR onerror for ${file.name}.`);
                             reject({ status: 0, statusText: 'Network error or XHR error', fileName: file.name });
                         };
                         currentXhr.onabort = () => {
                             clearTimeout(timeoutId);
-                            console.warn(`[File ${i+1}/${totalFiles}] XHR onabort for ${file.name}.`);
-                            reject({ status: 0, statusText: 'Upload aborted by user or timeout', fileName: file.name });
+                            console.warn(`[File ${i + 1}/${totalFiles}] XHR onabort for ${file.name}.`);
+                            const statusText = currentXhrAbortReason === 'timeout'
+                                ? 'Upload timed out waiting for server response'
+                                : 'Upload aborted by user';
+                            reject({ status: 0, statusText, fileName: file.name });
+                            currentXhrAbortReason = null;
                         };
                         currentXhr.ontimeout = () => { // Browser-level timeout, distinct from our JS timeout
                             clearTimeout(timeoutId);
-                            console.warn(`[File ${i+1}/${totalFiles}] XHR ontimeout (browser) for ${file.name}.`);
-                            reject({ status: 0, statusText: 'Upload hit XHR native timeout', fileName: file.name});
+                            console.warn(`[File ${i + 1}/${totalFiles}] XHR ontimeout (browser) for ${file.name}.`);
+                            reject({ status: 0, statusText: 'Upload hit XHR native timeout', fileName: file.name });
                         };
 
 
                         currentXhr.open('POST', UPLOAD_URL, true);
-                        // currentXhr.timeout = UPLOAD_TIMEOUT_MS; // Can also set native XHR timeout
-                        console.log(`[File ${i+1}/${totalFiles}] Sending XHR for ${file.name}`);
+                        // currentXhr.timeout = PER_FILE_UPLOAD_TIMEOUT_MS; // Optional native XHR timeout
+                        console.log(`[File ${i + 1}/${totalFiles}] Sending XHR for ${file.name}`);
                         currentXhr.send(formData);
                     });
 
-                    console.log(`[File ${i+1}/${totalFiles}] Promise resolved for ${file.name}. Response length: ${responseText.length}`);
+                    console.log(`[File ${i + 1}/${totalFiles}] Promise resolved for ${file.name}. Response length: ${responseText.length}`);
                     filesProcessed++;
                     uploadProgressBar.classList.add('bg-success');
                     uploadProgressBar.textContent = 'Processed';
@@ -1047,15 +1083,15 @@
 
                     const errFileName = errorObj.fileName || file.name;
                     let errorMsg = `Error with ${errFileName}: `;
-                    console.error(`[File ${i+1}/${totalFiles}] Caught error for ${errFileName}:`, errorObj);
+                    console.error(`[File ${i + 1}/${totalFiles}] Caught error for ${errFileName}:`, errorObj);
 
-                    if (errorObj.statusText === 'Upload aborted by user or timeout') {
-                        errorMsg = `Upload cancelled or timed out for ${errFileName}.`;
+                    if (errorObj.statusText === 'Upload aborted by user') {
+                        errorMsg = `Upload cancelled by user for ${errFileName}.`;
                         showUploadResult('warning', `<i class="bi bi-slash-circle-fill"></i> ${errorMsg}`, true);
-                        uploadStatus.textContent = `Upload process cancelled/timed out after ${filesProcessed} of ${totalFiles} files.`;
+                        uploadStatus.textContent = `Upload process cancelled after ${filesProcessed} of ${totalFiles} files.`;
                         break;
-                    } else if (errorObj.statusText === 'Upload timed out') { // From our JS timeout
-                        errorMsg = `Upload timed out for ${errFileName}.`;
+                    } else if (errorObj.statusText === 'Upload timed out waiting for server response') {
+                        errorMsg = `Upload timed out in browser for ${errFileName}. Server may still finish processing in the background.`;
                         showUploadResult('danger', `<i class="bi bi-clock-history"></i> ${errorMsg}`, true);
                         uploadStatus.textContent = `Upload process timed out for ${errFileName}.`;
                         break;
@@ -1069,14 +1105,15 @@
                         } catch (e) { /* no json response or already part of statusText */ }
                     }
                     showUploadResult('danger', `<i class="bi bi-exclamation-triangle-fill"></i> ${errorMsg}`, true);
-                    if (errorObj.statusText === 'Upload aborted by user or timeout' || errorObj.statusText === 'Upload timed out') {
+                    if (errorObj.statusText === 'Upload aborted by user' || errorObj.statusText === 'Upload timed out waiting for server response') {
                         break; // Explicitly break if it was an abort or our timeout
                     }
                 } finally {
-                    console.log(`[File ${i+1}/${totalFiles}] Inner finally block for ${file.name}. currentXhr is now null.`);
+                    console.log(`[File ${i + 1}/${totalFiles}] Inner finally block for ${file.name}. currentXhr is now null.`);
                     currentXhr = null;
+                    currentXhrAbortReason = null;
                 }
-                 // Brief pause before next file for readability, if not cancelled/timed out
+                // Brief pause before next file for readability, if not cancelled/timed out
                 if (filesProcessed < totalFiles && overallSuccess) { // Only pause if last was success
                     await new Promise(resolve => setTimeout(resolve, 300));
                 }
@@ -1114,6 +1151,7 @@
             showUploadResult('warning', 'Cancellation request sent...', true);
             uploadStatus.textContent = 'Attempting to cancel current file upload...';
             console.log("Attempting to abort currentXhr:", currentXhr);
+            currentXhrAbortReason = 'user';
             currentXhr.abort(); // This should trigger the onabort handler in the promise
         } else {
             console.log("Cancel button clicked, but no active XHR to abort (currentXhr is null). UI will be reset.");
@@ -1131,11 +1169,11 @@
         // --- Theme Switcher Logic --- End
 
         // Show loading indicator initially
-        if(loadingIndicator) loadingIndicator.style.display = 'block';
-        if(tableContainer) tableContainer.classList.add('js-hide-until-load');
-        if(paginationContainer) paginationContainer.classList.add('js-hide-until-load');
-        if(tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
-        if(noDetectionsMessage) noDetectionsMessage.classList.add('js-hide-until-load');
+        if (loadingIndicator) loadingIndicator.style.display = 'block';
+        if (tableContainer) tableContainer.classList.add('js-hide-until-load');
+        if (paginationContainer) paginationContainer.classList.add('js-hide-until-load');
+        if (tableErrorPlaceholder) tableErrorPlaceholder.classList.add('js-hide-until-load');
+        if (noDetectionsMessage) noDetectionsMessage.classList.add('js-hide-until-load');
 
         fetchAndUpdateData(false) // false = don't show "table updated" notification
             .then(() => {
@@ -1149,11 +1187,11 @@
 
         // Add search listener (client-side filtering)
         if (searchInput) {
-             let filterTimeout = null;
-             searchInput.addEventListener('input', () => {
-                 clearTimeout(filterTimeout);
-                 filterTimeout = setTimeout(applyFilterAndSort, 300);
-             });
+            let filterTimeout = null;
+            searchInput.addEventListener('input', () => {
+                clearTimeout(filterTimeout);
+                filterTimeout = setTimeout(applyFilterAndSort, 300);
+            });
         }
 
         // Add change listeners for new filter dropdowns
@@ -1165,7 +1203,7 @@
 
         // Add sort listeners
         sortableHeaders.forEach(header => {
-            header.addEventListener('click', function() {
+            header.addEventListener('click', function () {
                 const columnKey = this.dataset.columnKey;
                 if (!columnKey) return; // Ignore clicks on non-data headers
 
@@ -1189,13 +1227,13 @@
             cancelUploadButton.addEventListener('click', handleUploadCancel);
         }
         // Optional: Hide upload result message if file input is clicked again
-         if (imageFile) {
-             imageFile.addEventListener('click', () => {
-                 if (uploadResult.style.display === 'block') {
-                     uploadResult.style.display = 'none';
-                 }
-             });
-         }
+        if (imageFile) {
+            imageFile.addEventListener('click', () => {
+                if (uploadResult.style.display === 'block') {
+                    uploadResult.style.display = 'none';
+                }
+            });
+        }
 
         // Start polling for updates after initial load
         setInterval(() => fetchAndUpdateData(false), POLLING_INTERVAL_MS); // Poll without user notification

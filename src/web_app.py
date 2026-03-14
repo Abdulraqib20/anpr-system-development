@@ -1415,12 +1415,14 @@ def delete_detection(detection_id):
 @login_required
 @admin_required
 def admin_usage_metrics():
-    logger.info(f"Admin {current_user.username} accessing Groq API Usage Metrics page.")
+    logger.info(f"Admin {current_user.username} accessing LLM API Usage Metrics page.")
     conn = get_db()
     usage_data = {
         'summary_stats': {},
         'recent_calls': [],
         'by_call_type': {},
+        'providers_seen': [],
+        'local_provider_only': False,
         'error': None
     }
 
@@ -1432,11 +1434,20 @@ def admin_usage_metrics():
 
     if not conn:
         usage_data['error'] = "Database connection not available."
-        logger.error("Groq Usage Metrics: Database connection not available.")
-        return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics', usage_data=usage_data, pricing_rates=pricing_rates)
+        logger.error("LLM Usage Metrics: Database connection not available.")
+        return render_template('admin/admin_usage_metrics.html', title='LLM API Usage Metrics', usage_data=usage_data, pricing_rates=pricing_rates)
 
     try:
         with conn.cursor() as cur:
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'groq_api_usage' AND column_name = 'provider'
+                );
+            """)
+            has_provider_column = cur.fetchone()[0]
+
             # 1. Summary Stats (Total calls, total tokens today and overall)
             cur.execute("""
                 SELECT
@@ -1456,18 +1467,22 @@ def admin_usage_metrics():
                 }
 
             # 2. Recent API Calls (e.g., last 20)
+            recent_provider_select = "provider" if has_provider_column else "'groq' AS provider"
             cur.execute("""
-                SELECT timestamp, api_call_type, model_name, prompt_tokens, completion_tokens, total_tokens, related_detection_id
+                SELECT timestamp, {provider_field}, api_call_type, model_name, prompt_tokens, completion_tokens, total_tokens, related_detection_id
                 FROM groq_api_usage
                 ORDER BY timestamp DESC
                 LIMIT 20;
-            """)
+            """.format(provider_field=recent_provider_select))
             colnames_recent = [desc[0] for desc in cur.description]
             usage_data['recent_calls'] = [dict(zip(colnames_recent, row)) for row in cur.fetchall()]
 
             # 3. Aggregated by Call Type (Overall and Today)
+            aggregate_provider_select = "provider" if has_provider_column else "'groq' AS provider"
+            aggregate_provider_group = ", provider" if has_provider_column else ""
             cur.execute("""
                 SELECT
+                    {provider_field},
                     api_call_type,
                     model_name,
                     COUNT(*) as num_calls,
@@ -1478,9 +1493,9 @@ def admin_usage_metrics():
                     COUNT(CASE WHEN DATE(timestamp) = CURRENT_DATE THEN 1 ELSE NULL END) as today_num_calls,
                     SUM(CASE WHEN DATE(timestamp) = CURRENT_DATE THEN total_tokens ELSE 0 END) as today_sum_total_tokens
                 FROM groq_api_usage
-                GROUP BY api_call_type, model_name
+                GROUP BY api_call_type, model_name {provider_group}
                 ORDER BY api_call_type;
-            """)
+            """.format(provider_field=aggregate_provider_select, provider_group=aggregate_provider_group))
             colnames_by_type = [desc[0] for desc in cur.description]
             rows_by_type = cur.fetchall()
             for row_tuple in rows_by_type:
@@ -1490,15 +1505,28 @@ def admin_usage_metrics():
                     usage_data['by_call_type'][call_type] = []
                 usage_data['by_call_type'][call_type].append(row_dict)
 
+            providers = {
+                (row.get('provider') or 'groq')
+                for row in usage_data['recent_calls']
+                if isinstance(row, dict)
+            }
+            if not providers:
+                for call_type_stats in usage_data['by_call_type'].values():
+                    for row in call_type_stats:
+                        providers.add((row.get('provider') or 'groq'))
+
+            usage_data['providers_seen'] = sorted(providers)
+            usage_data['local_provider_only'] = bool(providers) and all(p == 'ollama' for p in providers)
+
     except psycopg2.Error as e:
-        logger.error(f"Groq Usage Metrics: Database error: {e}", exc_info=True)
+        logger.error(f"LLM Usage Metrics: Database error: {e}", exc_info=True)
         usage_data['error'] = f"Database error occurred: {str(e)}"
     except Exception as e_general:
-        logger.error(f"Groq Usage Metrics: General error: {e_general}", exc_info=True)
+        logger.error(f"LLM Usage Metrics: General error: {e_general}", exc_info=True)
         usage_data['error'] = f"An unexpected error occurred: {str(e_general)}"
 
     # Pass both usage_data and pricing_rates to the template
-    return render_template('admin/admin_usage_metrics.html', title='Groq API Usage Metrics',
+    return render_template('admin/admin_usage_metrics.html', title='LLM API Usage Metrics',
                           usage_data=usage_data, pricing_rates=pricing_rates)
 
 @app.route('/admin/detection-analytics')

@@ -9,43 +9,54 @@
         border-left: 5px solid var(--bs-primary);
         transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
     }
+
     .stat-card:hover {
         transform: translateY(-3px);
-        box-shadow: 0 .3rem .8rem rgba(0,0,0,.1)!important;
+        box-shadow: 0 .3rem .8rem rgba(0, 0, 0, .1) !important;
     }
+
     .stat-card .card-title {
         font-size: 1.1rem;
         font-weight: 500;
         color: var(--bs-secondary-color);
     }
+
     .stat-card .card-text {
         font-size: 2rem;
         font-weight: 700;
         color: var(--bs-body-color);
     }
-    .table-sm th, .table-sm td {
+
+    .table-sm th,
+    .table-sm td {
         padding: 0.4rem;
     }
+
     .model-name-badge {
         font-size: 0.8em;
         font-weight: normal;
     }
+
     .note-text {
         font-size: 0.9rem;
         color: var(--bs-secondary-color);
     }
+
     /* Additional styles for pricing section */
     .pricing-card {
         border-left: 5px solid var(--bs-success);
     }
+
     .pricing-info {
         font-size: 0.85rem;
         color: var(--bs-secondary-color);
     }
+
     .pricing-value {
         font-weight: 700;
         color: var(--bs-success);
     }
+
     .card-header i {
         margin-right: 0.5rem;
     }
@@ -55,16 +66,25 @@
 {% block content %}
 <div class="container mt-4 mb-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1 class="h2"><i class="bi bi-graph-up-arrow me-2"></i>Groq API Usage Metrics</h1>
+        <h1 class="h2"><i class="bi bi-graph-up-arrow me-2"></i>LLM API Usage Metrics</h1>
         <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
             <i class="bi bi-arrow-left"></i> Back to Admin Dashboard
         </a>
     </div>
 
+    {% if usage_data.providers_seen %}
+    <div class="alert alert-info py-2" role="alert">
+        <strong>Providers seen:</strong> {{ usage_data.providers_seen | join(', ') }}
+        {% if usage_data.local_provider_only %}
+        <span class="ms-2">(Local-only usage detected)</span>
+        {% endif %}
+    </div>
+    {% endif %}
+
     {% if usage_data.error %}
-        <div class="alert alert-danger" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2"></i> <strong>Error:</strong> {{ usage_data.error }}
-        </div>
+    <div class="alert alert-danger" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> <strong>Error:</strong> {{ usage_data.error }}
+    </div>
     {% endif %}
 
     <!-- Summary Statistics -->
@@ -81,7 +101,8 @@
             <div class="card stat-card shadow-sm">
                 <div class="card-body text-center">
                     <h6 class="card-title mb-1">Total Tokens (Overall)</h6>
-                    <p class="card-text mb-0">{{ "{:,}".format(usage_data.summary_stats.grand_total_tokens | default(0)) }}</p>
+                    <p class="card-text mb-0">{{ "{:,}".format(usage_data.summary_stats.grand_total_tokens | default(0))
+                        }}</p>
                 </div>
             </div>
         </div>
@@ -97,7 +118,8 @@
             <div class="card stat-card shadow-sm">
                 <div class="card-body text-center">
                     <h6 class="card-title mb-1">Total Tokens (Today)</h6>
-                    <p class="card-text mb-0">{{ "{:,}".format(usage_data.summary_stats.today_total_tokens | default(0)) }}</p>
+                    <p class="card-text mb-0">{{ "{:,}".format(usage_data.summary_stats.today_total_tokens | default(0))
+                        }}</p>
                 </div>
             </div>
         </div>
@@ -110,7 +132,8 @@
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="mb-0"><i class="bi bi-currency-dollar me-2"></i>Cost Analysis</h5>
                     <span class="pricing-info">
-                        <i class="bi bi-info-circle"></i> Current rate: ${{ "%.7f"|format(pricing_rates.per_token | default(0.00013)|float) }} per token
+                        <i class="bi bi-info-circle"></i> Current rate: ${{ "%.7f"|format(pricing_rates.per_token |
+                        default(0.00013)|float) }} per token
                     </span>
                 </div>
                 <div class="card-body">
@@ -119,7 +142,8 @@
                             <div class="card shadow-sm">
                                 <div class="card-body text-center">
                                     <h6 class="card-title mb-1">Cost of Tokens (Overall)</h6>
-                                    {% set token_cost = (usage_data.summary_stats.grand_total_tokens | default(0)) * (pricing_rates.per_token | default(0.00013)|float) %}
+                                    {% set token_cost = (usage_data.summary_stats.grand_total_tokens | default(0)) *
+                                    (pricing_rates.per_token | default(0.00013)|float) %}
                                     <p class="card-text pricing-value mb-0">${{ "%.2f"|format(token_cost) }}</p>
                                 </div>
                             </div>
@@ -128,7 +152,8 @@
                             <div class="card shadow-sm">
                                 <div class="card-body text-center">
                                     <h6 class="card-title mb-1">Cost of Tokens (Today)</h6>
-                                    {% set today_token_cost = (usage_data.summary_stats.today_total_tokens | default(0)) * (pricing_rates.per_token | default(0.00013)|float) %}
+                                    {% set today_token_cost = (usage_data.summary_stats.today_total_tokens | default(0))
+                                    * (pricing_rates.per_token | default(0.00013)|float) %}
                                     <p class="card-text pricing-value mb-0">${{ "%.2f"|format(today_token_cost) }}</p>
                                 </div>
                             </div>
@@ -137,9 +162,11 @@
                             <div class="card shadow-sm">
                                 <div class="card-body text-center">
                                     <h6 class="card-title mb-1">Average Cost Per Call (Overall)</h6>
-                                    {% set avg_token_cost_per_call = (usage_data.summary_stats.grand_total_tokens | default(0)) * (pricing_rates.per_token | default(0.00013)|float) %}
+                                    {% set avg_token_cost_per_call = (usage_data.summary_stats.grand_total_tokens |
+                                    default(0)) * (pricing_rates.per_token | default(0.00013)|float) %}
                                     {% set total_calls_for_avg = usage_data.summary_stats.total_calls | default(1) %}
-                                    {% set avg_cost_per_call = avg_token_cost_per_call / total_calls_for_avg if total_calls_for_avg > 0 else 0 %}
+                                    {% set avg_cost_per_call = avg_token_cost_per_call / total_calls_for_avg if
+                                    total_calls_for_avg > 0 else 0 %}
                                     <p class="card-text pricing-value mb-0">${{ "%.4f"|format(avg_cost_per_call) }}</p>
                                 </div>
                             </div>
@@ -152,57 +179,55 @@
     <!-- END PRICING SECTION -->
 
     <p class="note-text mb-4">
-        <i class="bi bi-info-circle"></i> <strong>Note:</strong> These metrics reflect recorded API calls made by the ANPR system.
-        "Tokens" are units of text processing by the AI model. This data helps monitor usage but does not directly show remaining quotas or exact rate limit status from Groq, as this might not be available for the current model tier.
-        High request volumes might indicate proximity to Groq's usage limits.
+        <i class="bi bi-info-circle"></i> <strong>Note:</strong> These metrics reflect recorded LLM calls made by the
+        ANPR system.
+        Token and cost estimates are most relevant for metered cloud providers.
+        For local providers such as Ollama, costs and provider-side limits may not apply.
     </p>
 
     <!-- Rate Limit Information & Current Status -->
     <div class="card mb-4 shadow-sm">
         <div class="card-header">
-            <h5 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Groq API Rate Limits & Status ({{ usage_data.recent_calls[0].model_name if usage_data.recent_calls else "meta-llama/llama-4-scout-17b-16e-instruct" }})</h5>
+            <h5 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Provider Activity Status ({{
+                usage_data.recent_calls[0].model_name if usage_data.recent_calls else "N/A" }})</h5>
         </div>
         <div class="card-body">
             <div class="row">
                 <div class="col-md-8">
-                    <p class="fw-bold mb-2">Current Model Limits:</p>
+                    <p class="fw-bold mb-2">Usage Notes:</p>
                     <ul class="list-unstyled mb-3 small">
-                        <li><strong>Requests Per Minute (RPM):</strong> 30</li>
-                        <li><strong>Requests Per Day (RPD):</strong> 1,000</li>
-                        <li><strong>Tokens Per Minute (TPM):</strong> 30,000</li>
-                        <li><strong>Context Window:</strong> 131,072 tokens</li>
-                        <li><strong>Max Completion Tokens:</strong> 8,192 tokens per call</li>
+                        <li><strong>Calls and token counts:</strong> Derived from stored API usage records.</li>
+                        <li><strong>Provider limits:</strong> Depend on the active backend (local Ollama vs cloud APIs).
+                        </li>
+                        <li><strong>Cost estimates:</strong> Based on configured token pricing and may not apply to
+                            local inference.</li>
                     </ul>
                     <p class="small text-muted">
-                        <i class="bi bi-info-circle"></i> The "Tokens Per Minute" (TPM) includes both prompt and completion tokens.
-                        The "Recent API Calls" table below can help gauge if you are approaching the RPM limit.
+                        <i class="bi bi-info-circle"></i> Use the "Recent API Calls" table below to inspect
+                        model/provider activity over time.
                     </p>
                 </div>
                 <div class="col-md-4">
-                    {% set daily_requests_limit = 1000 %}
                     {% set today_calls = usage_data.summary_stats.today_total_calls | default(0) %}
                     {% set today_tokens = usage_data.summary_stats.today_total_tokens | default(0) %}
 
-                    {% set remaining_requests_today = daily_requests_limit - today_calls %}
-                    {% set requests_today_percentage = (today_calls / daily_requests_limit * 100) if daily_requests_limit > 0 else 0 %}
+                    {% set daily_activity_target = 1000 %}
+                    {% set activity_percentage = (today_calls / daily_activity_target * 100) if daily_activity_target >
+                    0 else 0 %}
 
-                    <p class="fw-bold mb-1">Daily Usage Status (vs RPD):</p>
+                    <p class="fw-bold mb-1">Daily Activity Snapshot:</p>
                     <div class="progress mb-2" style="height: 20px;">
-                        <div class="progress-bar {% if requests_today_percentage > 85 %}bg-danger{% elif requests_today_percentage > 60 %}bg-warning{% else %}bg-success{% endif %}"
-                             role="progressbar"
-                             style="width: {{ "%.1f"|format(requests_today_percentage) }}%;"
-                             aria-valuenow="{{ requests_today_percentage }}"
-                             aria-valuemin="0" aria-valuemax="100">
-                             {{ "%.1f"|format(requests_today_percentage) }}%
+                        <div class="progress-bar {% if activity_percentage > 85 %}bg-danger{% elif activity_percentage > 60 %}bg-warning{% else %}bg-success{% endif %}"
+                            role="progressbar" data-usage-percent="{{ '%.1f'|format(activity_percentage) }}"
+                            aria-valuenow="{{ activity_percentage }}" aria-valuemin="0" aria-valuemax="100">
+                            {{ "%.1f"|format(activity_percentage) }}%
                         </div>
                     </div>
                     <p class="small mb-0">
-                        Requests Today: <strong>{{ today_calls }} / {{ daily_requests_limit }}</strong>
-                        (Remaining: <strong>{{ remaining_requests_today if remaining_requests_today > 0 else 0 }}</strong>)
+                        Calls Today: <strong>{{ today_calls }}</strong>
                     </p>
                     <p class="small text-muted">
                         Tokens Today: <strong>{{ "{:,}".format(today_tokens) }}</strong>
-                        (Note: TPM is the primary token rate limit, RPD for requests).
                     </p>
                 </div>
             </div>
@@ -217,49 +242,54 @@
         </div>
         <div class="card-body p-0">
             {% if usage_data.by_call_type %}
-                <div class="table-responsive">
-                    <table class="table table-sm table-striped table-hover mb-0">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>Call Type</th>
-                                <th>Model Name</th>
-                                <th class="text-end">Total Calls</th>
-                                <th class="text-end">Total Tokens</th>
-                                <th class="text-end">Avg Tokens/Call</th>
-                                <th class="text-end">Calls Today</th>
-                                <th class="text-end">Tokens Today</th>
-                                <th class="text-end">Est. Cost ($)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Call Type</th>
+                            <th>Provider</th>
+                            <th>Model Name</th>
+                            <th class="text-end">Total Calls</th>
+                            <th class="text-end">Total Tokens</th>
+                            <th class="text-end">Avg Tokens/Call</th>
+                            <th class="text-end">Calls Today</th>
+                            <th class="text-end">Tokens Today</th>
+                            <th class="text-end">Est. Cost ($)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
                         {% for call_type, type_stats_list in usage_data.by_call_type.items() %}
-                            {% for stats in type_stats_list %}
-                            <tr>
-                                <td>{{ stats.api_call_type | replace('_', ' ') | title }}</td>
-                                <td><span class="badge bg-secondary model-name-badge">{{ stats.model_name }}</span></td>
-                                <td class="text-end">{{ "{:,}".format(stats.num_calls | default(0)) }}</td>
-                                <td class="text-end">{{ "{:,}".format(stats.sum_total_tokens | default(0)) }}</td>
-                                <td class="text-end">{{ "{:,}".format(stats.avg_total_tokens | default(0)) }}</td>
-                                <td class="text-end">{{ "{:,}".format(stats.today_num_calls | default(0)) }}</td>
-                                <td class="text-end">{{ "{:,}".format(stats.today_sum_total_tokens | default(0)) }}</td>
-                                <td class="text-end">
-                                    {% set type_token_cost = (stats.sum_total_tokens | default(0)) * (pricing_rates.per_token | default(0.00013)|float) %}
-                                    <span class="pricing-value">${{ "%.2f"|format(type_token_cost) }}</span>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        {% else %}
-                            <tr>
-                                <td colspan="8" class="text-center text-muted py-3">No usage data aggregated by call type yet.</td>
-                            </tr>
+                        {% for stats in type_stats_list %}
+                        <tr>
+                            <td>{{ stats.api_call_type | replace('_', ' ') | title }}</td>
+                            <td><span class="badge bg-info text-dark model-name-badge">{{ stats.provider |
+                                    default('groq') }}</span></td>
+                            <td><span class="badge bg-secondary model-name-badge">{{ stats.model_name }}</span></td>
+                            <td class="text-end">{{ "{:,}".format(stats.num_calls | default(0)) }}</td>
+                            <td class="text-end">{{ "{:,}".format(stats.sum_total_tokens | default(0)) }}</td>
+                            <td class="text-end">{{ "{:,}".format(stats.avg_total_tokens | default(0)) }}</td>
+                            <td class="text-end">{{ "{:,}".format(stats.today_num_calls | default(0)) }}</td>
+                            <td class="text-end">{{ "{:,}".format(stats.today_sum_total_tokens | default(0)) }}</td>
+                            <td class="text-end">
+                                {% set type_token_cost = (stats.sum_total_tokens | default(0)) *
+                                (pricing_rates.per_token | default(0.00013)|float) %}
+                                <span class="pricing-value">${{ "%.2f"|format(type_token_cost) }}</span>
+                            </td>
+                        </tr>
                         {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
+                        {% else %}
+                        <tr>
+                            <td colspan="9" class="text-center text-muted py-3">No usage data aggregated by call type
+                                yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
             {% else %}
-                <div class="text-center p-3 text-muted">
-                    No usage data aggregated by call type available.
-                </div>
+            <div class="text-center p-3 text-muted">
+                No usage data aggregated by call type available.
+            </div>
             {% endif %}
         </div>
     </div>
@@ -271,53 +301,58 @@
         </div>
         <div class="card-body p-0">
             {% if usage_data.recent_calls %}
-                <div class="table-responsive">
-                    <table class="table table-sm table-striped table-hover mb-0">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>Timestamp</th>
-                                <th>Call Type</th>
-                                <th>Model</th>
-                                <th class="text-end">Prompt Tokens</th>
-                                <th class="text-end">Completion Tokens</th>
-                                <th class="text-end">Total Tokens</th>
-                                <th class="text-end">Detection ID</th>
-                                <th class="text-end">Est. Cost ($)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Call Type</th>
+                            <th>Provider</th>
+                            <th>Model</th>
+                            <th class="text-end">Prompt Tokens</th>
+                            <th class="text-end">Completion Tokens</th>
+                            <th class="text-end">Total Tokens</th>
+                            <th class="text-end">Detection ID</th>
+                            <th class="text-end">Est. Cost ($)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
                         {% for call in usage_data.recent_calls %}
-                            <tr>
-                                <td>{{ call.timestamp.strftime('%Y-%m-%d %H:%M:%S') if call.timestamp else 'N/A' }}</td>
-                                <td>{{ call.api_call_type | replace('_', ' ') | title }}</td>
-                                <td><span class="badge bg-secondary model-name-badge">{{ call.model_name }}</span></td>
-                                <td class="text-end">{{ "{:,}".format(call.prompt_tokens | default(0)) }}</td>
-                                <td class="text-end">{{ "{:,}".format(call.completion_tokens | default(0)) }}</td>
-                                <td class="text-end">{{ "{:,}".format(call.total_tokens | default(0)) }}</td>
-                                <td class="text-end">
-                                    {% if call.related_detection_id %}
-                                        <a href="{{ url_for('index', search=call.related_detection_id) }}#detection-id-{{ call.related_detection_id }}" title="View Detection">{{ call.related_detection_id }}</a>
-                                    {% else %}
-                                        -
-                                    {% endif %}
-                                </td>
-                                <td class="text-end">
-                                    {% set call_token_cost = (call.total_tokens | default(0)) * (pricing_rates.per_token | default(0.00013)|float) %}
-                                    <span class="pricing-value">${{ "%.2f"|format(call_token_cost) }}</span>
-                                </td>
-                            </tr>
+                        <tr>
+                            <td>{{ call.timestamp.strftime('%Y-%m-%d %H:%M:%S') if call.timestamp else 'N/A' }}</td>
+                            <td>{{ call.api_call_type | replace('_', ' ') | title }}</td>
+                            <td><span class="badge bg-info text-dark model-name-badge">{{ call.provider |
+                                    default('groq') }}</span></td>
+                            <td><span class="badge bg-secondary model-name-badge">{{ call.model_name }}</span></td>
+                            <td class="text-end">{{ "{:,}".format(call.prompt_tokens | default(0)) }}</td>
+                            <td class="text-end">{{ "{:,}".format(call.completion_tokens | default(0)) }}</td>
+                            <td class="text-end">{{ "{:,}".format(call.total_tokens | default(0)) }}</td>
+                            <td class="text-end">
+                                {% if call.related_detection_id %}
+                                <a href="{{ url_for('index', search=call.related_detection_id) }}#detection-id-{{ call.related_detection_id }}"
+                                    title="View Detection">{{ call.related_detection_id }}</a>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% set call_token_cost = (call.total_tokens | default(0)) * (pricing_rates.per_token |
+                                default(0.00013)|float) %}
+                                <span class="pricing-value">${{ "%.2f"|format(call_token_cost) }}</span>
+                            </td>
+                        </tr>
                         {% else %}
-                            <tr>
-                                <td colspan="8" class="text-center text-muted py-3">No recent API calls recorded.</td>
-                            </tr>
+                        <tr>
+                            <td colspan="9" class="text-center text-muted py-3">No recent API calls recorded.</td>
+                        </tr>
                         {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
+                    </tbody>
+                </table>
+            </div>
             {% else %}
-                <div class="text-center p-3 text-muted">
-                    No recent API calls recorded.
-                </div>
+            <div class="text-center p-3 text-muted">
+                No recent API calls recorded.
+            </div>
             {% endif %}
         </div>
     </div>
@@ -327,8 +362,12 @@
 
 {% block scripts_extra %}
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-    // Chart-related JavaScript removed
-});
+    document.addEventListener('DOMContentLoaded', function () {
+        const usageBar = document.querySelector('.progress-bar[data-usage-percent]');
+        if (usageBar) {
+            const pct = Number(usageBar.getAttribute('data-usage-percent') || 0);
+            usageBar.style.width = `${pct}%`;
+        }
+    });
 </script>
 {% endblock %}

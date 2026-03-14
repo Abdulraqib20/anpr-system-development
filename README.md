@@ -121,7 +121,15 @@ The system is built with a modular architecture:
    DB_PORT=5432
 
    # API Keys
+   # Optional when OCR_PROVIDER=ollama and OCR_FALLBACK_TO_GROQ=false
    GROQ_API_KEY=your_groq_api_key_here
+
+   # OCR Provider Settings (Ollama-first)
+   OCR_PROVIDER=ollama
+   OCR_FALLBACK_TO_GROQ=false
+   OLLAMA_HOST=http://127.0.0.1:11434
+   OLLAMA_MODEL=qwen3.5:9b
+   GROQ_MODEL_NAME=meta-llama/llama-4-scout-17b-16e-instruct
 
    # Application Settings
    FLASK_SECRET_KEY=your_secret_key_here
@@ -231,7 +239,15 @@ python -m src.web_app
    DB_PORT=5432
 
    # API Keys
+   # Optional when OCR_PROVIDER=ollama and OCR_FALLBACK_TO_GROQ=false
    GROQ_API_KEY=your_groq_api_key_here
+
+   # OCR Provider Settings (Ollama-first)
+   OCR_PROVIDER=ollama
+   OCR_FALLBACK_TO_GROQ=false
+   OLLAMA_HOST=http://127.0.0.1:11434
+   OLLAMA_MODEL=qwen3.5:9b
+   GROQ_MODEL_NAME=meta-llama/llama-4-scout-17b-16e-instruct
 
    # Application Settings
    SECRET_KEY=your_secret_key_here
